@@ -88,4 +88,4 @@
   - GetModuleBase is the best place to start for models so it will query for the right addresses, x64dbg will not respond to addresses out of range.
 <br>
 <br>
-🧀**Enjoy Automated Debugging**🛎️
+🧀  <b>Enjoy Automated Debugging</b>  🛎️
