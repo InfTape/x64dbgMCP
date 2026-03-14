@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <memory>
 #include <fstream>
+#include <cstring>
 #include <cctype>
 // Link with ws2_32.lib
 #pragma comment(lib, "ws2_32.lib")
@@ -86,6 +87,7 @@ void stopHttpServer();
 DWORD WINAPI HttpServerThread(LPVOID lpParam);
 std::string readHttpRequest(SOCKET clientSocket);
 void sendHttpResponse(SOCKET clientSocket, int statusCode, const std::string& contentType, const std::string& responseBody);
+bool sendAll(SOCKET clientSocket, const char* data, size_t length);
 void parseHttpRequest(const std::string& request, std::string& method, std::string& path, std::string& query, std::string& body);
 std::unordered_map<std::string, std::string> parseQueryParams(const std::string& query);
 std::string urlDecode(const std::string& str);
@@ -357,6 +359,21 @@ std::string escapeJsonString(const char* str) {
         str++;
     }
     return result;
+}
+
+static bool tryDisasmInstruction(duint addr, DISASM_INSTR& instr) {
+    memset(&instr, 0, sizeof(instr));
+    DbgDisasmAt(addr, &instr);
+    return instr.instr_size > 0;
+}
+
+static void appendDisasmInstructionJson(std::stringstream& ss, duint addr, const DISASM_INSTR& instr, bool found) {
+    ss << "{";
+    ss << "\"address\":\"0x" << std::hex << addr << "\",";
+    ss << "\"instruction\":\"" << escapeJsonString(instr.instruction) << "\",";
+    ss << "\"size\":" << std::dec << instr.instr_size << ",";
+    ss << "\"found\":" << (found ? "true" : "false");
+    ss << "}";
 }
 
 // HTTP server thread function using standard Winsock
@@ -1064,17 +1081,11 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         continue;
                     }
                     
-                    // Use the correct DISASM_INSTR structure
                     DISASM_INSTR instr;
-                    DbgDisasmAt(addr, &instr);
-                    
-                    // Create JSON response with available instruction details
+                    bool found = tryDisasmInstruction(addr, instr);
+
                     std::stringstream ss;
-                    ss << "{";
-                    ss << "\"address\":\"0x" << std::hex << addr << "\",";
-                    ss << "\"instruction\":\"" << instr.instruction << "\",";
-                    ss << "\"size\":" << std::dec << instr.instr_size;
-                    ss << "}";
+                    appendDisasmInstructionJson(ss, addr, instr, found);
                     
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
@@ -1115,19 +1126,15 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     ss << "[";
                     
                     duint currentAddr = addr;
+                    bool appended = false;
                     for (int i = 0; i < count; i++) {
                         DISASM_INSTR instr;
-                        DbgDisasmAt(currentAddr, &instr);
+                        bool found = tryDisasmInstruction(currentAddr, instr);
                         
-                        if (instr.instr_size > 0) {
-                            if (i > 0) ss << ",";
-                            
-                            ss << "{";
-                            ss << "\"address\":\"0x" << std::hex << currentAddr << "\",";
-                            ss << "\"instruction\":\"" << instr.instruction << "\",";
-                            ss << "\"size\":" << std::dec << instr.instr_size;
-                            ss << "}";
-                            
+                        if (found) {
+                            if (appended) ss << ",";
+                            appendDisasmInstructionJson(ss, currentAddr, instr, true);
+                            appended = true;
                             currentAddr += instr.instr_size;
                         } else {
                             break;
@@ -1145,15 +1152,16 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     duint rip = Script::Register::Get(REG_IP);
                     
                     DISASM_INSTR instr;
-                    DbgDisasmAt(rip, &instr);
+                    bool found = tryDisasmInstruction(rip, instr);
                     
                     // Create JSON response
                     std::stringstream ss;
                     ss << "{";
                     ss << "\"step_result\":\"Step in executed\",";
                     ss << "\"rip\":\"0x" << std::hex << rip << "\",";
-                    ss << "\"instruction\":\"" << instr.instruction << "\",";
-                    ss << "\"size\":" << std::dec << instr.instr_size;
+                    ss << "\"instruction\":\"" << escapeJsonString(instr.instruction) << "\",";
+                    ss << "\"size\":" << std::dec << instr.instr_size << ",";
+                    ss << "\"found\":" << (found ? "true" : "false");
                     ss << "}";
                     
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
@@ -1715,7 +1723,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // MEMORY MAP ENDPOINT
                 // =============================================================================
-                else if (path == "/MemoryMap") {
+                else if (path == "/GetMemoryMap") {
                     MEMMAP memmap;
                     memset(&memmap, 0, sizeof(memmap));
                     bool success = DbgMemMap(&memmap);
@@ -2490,6 +2498,26 @@ void parseHttpRequest(const std::string& request, std::string& method, std::stri
 }
 
 // Function to send HTTP response
+bool sendAll(SOCKET clientSocket, const char* data, size_t length) {
+    size_t totalSent = 0;
+
+    while (totalSent < length) {
+        const size_t remaining = length - totalSent;
+        const int chunkSize = remaining > static_cast<size_t>(INT_MAX)
+            ? INT_MAX
+            : static_cast<int>(remaining);
+
+        const int sent = send(clientSocket, data + totalSent, chunkSize, 0);
+        if (sent == SOCKET_ERROR || sent == 0) {
+            return false;
+        }
+
+        totalSent += static_cast<size_t>(sent);
+    }
+
+    return true;
+}
+
 void sendHttpResponse(SOCKET clientSocket, int statusCode, const std::string& contentType, const std::string& responseBody) {
     // Prepare status line
     std::string statusText;
@@ -2511,7 +2539,10 @@ void sendHttpResponse(SOCKET clientSocket, int statusCode, const std::string& co
     
     // Send the response
     std::string responseStr = response.str();
-    send(clientSocket, responseStr.c_str(), (int)responseStr.length(), 0);
+    if (!sendAll(clientSocket, responseStr.c_str(), responseStr.length())) {
+        _plugin_logprintf("sendAll failed with WSA error %d while sending %zu bytes\n",
+            WSAGetLastError(), responseStr.length());
+    }
 }
 
 // Parse query or form-urlencoded parameters and URL-decode key/value pairs.

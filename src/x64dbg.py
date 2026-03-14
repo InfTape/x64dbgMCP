@@ -605,13 +605,22 @@ def DisasmGetInstructionRange(addr: str, count: int = 1) -> list:
         List of dictionaries containing instruction details
     """
     result = safe_get("Disasm/GetInstructionRange", {"addr": addr, "count": str(count)})
-    if isinstance(result, list):
-        return result
-    elif isinstance(result, str):
+    if isinstance(result, str):
         try:
-            return json.loads(result)
+            result = json.loads(result)
         except:
             return [{"error": "Failed to parse disassembly result", "raw": result}]
+
+    if isinstance(result, list):
+        if result:
+            return result
+        # FastMCP can choke on empty list tool results, so return an explicit miss item.
+        return [{
+            "address": addr,
+            "instruction": "",
+            "size": 0,
+            "found": False
+        }]
     return [{"error": "Unexpected response format"}]
 
 
@@ -907,7 +916,7 @@ def GetMemoryMap() -> dict:
         - pages: List of page objects with base, size, protect (ERW/ER-/-RW/-R-/E--/---),
           type (IMG/MAP/PRV), and info (module name or description)
     """
-    result = safe_get("MemoryMap")
+    result = safe_get("GetMemoryMap")
     if isinstance(result, dict):
         return result
     elif isinstance(result, str):
