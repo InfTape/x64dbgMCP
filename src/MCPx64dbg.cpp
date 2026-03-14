@@ -248,6 +248,89 @@ static bool tryParseDuint(const std::string& value, duint& parsedValue, int defa
     }
 }
 
+static std::string getRequestParam(
+    const std::unordered_map<std::string, std::string>& queryParams,
+    const std::unordered_map<std::string, std::string>& bodyParams,
+    const std::string& key) {
+    auto queryIt = queryParams.find(key);
+    if (queryIt != queryParams.end() && !queryIt->second.empty()) {
+        return queryIt->second;
+    }
+
+    auto bodyIt = bodyParams.find(key);
+    if (bodyIt != bodyParams.end() && !bodyIt->second.empty()) {
+        return bodyIt->second;
+    }
+
+    return "";
+}
+
+static bool normalizePageRights(const std::string& rawRights, std::string& normalizedRights) {
+    normalizedRights.clear();
+
+    std::string decoded = urlDecode(rawRights);
+    std::string compactRights;
+    compactRights.reserve(decoded.size());
+
+    for (char ch : decoded) {
+        unsigned char uch = static_cast<unsigned char>(ch);
+        if (std::isspace(uch) || ch == '-') {
+            continue;
+        }
+
+        char upper = static_cast<char>(std::toupper(uch));
+        switch (upper) {
+            case 'E':
+            case 'R':
+            case 'W':
+            case 'X':
+            case 'C':
+            case 'G':
+                compactRights += upper;
+                break;
+            default:
+                return false;
+        }
+    }
+
+    const bool hasExecute = compactRights.find('E') != std::string::npos ||
+                            compactRights.find('X') != std::string::npos;
+    const bool hasRead = compactRights.find('R') != std::string::npos;
+    const bool hasWrite = compactRights.find('W') != std::string::npos;
+    const bool hasCopy = compactRights.find('C') != std::string::npos;
+    const bool hasGuard = compactRights.find('G') != std::string::npos;
+
+    std::string baseRights;
+    if (hasExecute) {
+        if (hasCopy) {
+            baseRights = "ExecuteWriteCopy";
+        } else if (hasRead && hasWrite) {
+            baseRights = "ExecuteReadWrite";
+        } else if (hasRead) {
+            baseRights = "ExecuteRead";
+        } else if (!hasWrite) {
+            baseRights = "Execute";
+        } else {
+            return false;
+        }
+    } else {
+        if (hasCopy) {
+            baseRights = "WriteCopy";
+        } else if (hasRead && hasWrite) {
+            baseRights = "ReadWrite";
+        } else if (hasRead) {
+            baseRights = "ReadOnly";
+        } else if (!hasWrite) {
+            baseRights = "NoAccess";
+        } else {
+            return false;
+        }
+    }
+
+    normalizedRights = hasGuard ? "G" + baseRights : baseRights;
+    return true;
+}
+
 // Escape a string for safe inclusion in a JSON string value
 std::string escapeJsonString(const char* str) {
     std::string result;
@@ -355,6 +438,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
             
             // Parse query parameters
             std::unordered_map<std::string, std::string> queryParams = parseQueryParams(query);
+            std::unordered_map<std::string, std::string> bodyParams = parseQueryParams(body);
             
             // Handle different endpoints
             try {
@@ -731,6 +815,45 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     std::stringstream ss;
                     ss << "0x" << std::hex << protect;
                     sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                }
+                else if (path == "/Memory/SetPageRights") {
+                    std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
+                    std::string rightsStr = getRequestParam(queryParams, bodyParams, "rights");
+
+                    if (addrStr.empty() || rightsStr.empty()) {
+                        sendHttpResponse(clientSocket, 400, "application/json",
+                            "{\"error\":\"Missing required 'addr' or 'rights' parameter\"}");
+                        continue;
+                    }
+
+                    duint addr = 0;
+                    if (!tryParseDuint(addrStr, addr, 16)) {
+                        sendHttpResponse(clientSocket, 400, "application/json",
+                            "{\"error\":\"Invalid address format\"}");
+                        continue;
+                    }
+
+                    std::string normalizedRights;
+                    if (!normalizePageRights(rightsStr, normalizedRights)) {
+                        sendHttpResponse(clientSocket, 400, "application/json",
+                            "{\"error\":\"Invalid rights format. Use values like rwx, rx, rw, ERW, ER, RW, ReadOnly or ExecuteReadWrite\"}");
+                        continue;
+                    }
+
+                    const DBGFUNCTIONS* dbgFunc = DbgFunctions();
+                    if (!dbgFunc || !dbgFunc->SetPageRights) {
+                        sendHttpResponse(clientSocket, 500, "application/json",
+                            "{\"error\":\"SetPageRights not available\"}");
+                        continue;
+                    }
+
+                    bool success = dbgFunc->SetPageRights(addr, normalizedRights.c_str());
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false") << ","
+                       << "\"address\":\"0x" << std::hex << addr << "\","
+                       << "\"rights\":\"" << normalizedRights << "\"}";
+
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
                 
                 // =============================================================================

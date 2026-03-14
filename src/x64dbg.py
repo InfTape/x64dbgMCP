@@ -777,7 +777,7 @@ def SetPageRights(addr: str, rights: str) -> bool:
 
     Args:
         addr: Virtual address (hex string, e.g. "0x401000")
-        rights: Rights string (e.g. "rwx", "rx", "rw")
+        rights: Rights string (e.g. "rwx", "rx", "rw", "ERW", "ER", "RW")
 
     Returns:
         True if successful, False otherwise
