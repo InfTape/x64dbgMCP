@@ -333,6 +333,67 @@ static bool normalizePageRights(const std::string& rawRights, std::string& norma
     return true;
 }
 
+static bool tryParseRegisterName(const std::string& rawName, Script::Register::RegisterEnum& reg) {
+    std::string regName = rawName;
+    std::transform(regName.begin(), regName.end(), regName.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    if (regName == "cax") reg = Script::Register::CAX;
+    else if (regName == "cbx") reg = Script::Register::CBX;
+    else if (regName == "ccx") reg = Script::Register::CCX;
+    else if (regName == "cdx") reg = Script::Register::CDX;
+    else if (regName == "csi") reg = Script::Register::CSI;
+    else if (regName == "cdi") reg = Script::Register::CDI;
+    else if (regName == "cbp") reg = Script::Register::CBP;
+    else if (regName == "csp") reg = Script::Register::CSP;
+    else if (regName == "cip") reg = Script::Register::CIP;
+    else if (regName == "cflags" || regName == "eflags" || regName == "rflags") reg = Script::Register::CFLAGS;
+    else if (regName == "eax") reg = Script::Register::EAX;
+    else if (regName == "ebx") reg = Script::Register::EBX;
+    else if (regName == "ecx") reg = Script::Register::ECX;
+    else if (regName == "edx") reg = Script::Register::EDX;
+    else if (regName == "esi") reg = Script::Register::ESI;
+    else if (regName == "edi") reg = Script::Register::EDI;
+    else if (regName == "ebp") reg = Script::Register::EBP;
+    else if (regName == "esp") reg = Script::Register::ESP;
+    else if (regName == "eip") reg = Script::Register::EIP;
+#ifdef _WIN64
+    else if (regName == "rax") reg = Script::Register::RAX;
+    else if (regName == "rbx") reg = Script::Register::RBX;
+    else if (regName == "rcx") reg = Script::Register::RCX;
+    else if (regName == "rdx") reg = Script::Register::RDX;
+    else if (regName == "rsi") reg = Script::Register::RSI;
+    else if (regName == "rdi") reg = Script::Register::RDI;
+    else if (regName == "rbp") reg = Script::Register::RBP;
+    else if (regName == "rsp") reg = Script::Register::RSP;
+    else if (regName == "rip") reg = Script::Register::RIP;
+    else if (regName == "r8") reg = Script::Register::R8;
+    else if (regName == "r9") reg = Script::Register::R9;
+    else if (regName == "r10") reg = Script::Register::R10;
+    else if (regName == "r11") reg = Script::Register::R11;
+    else if (regName == "r12") reg = Script::Register::R12;
+    else if (regName == "r13") reg = Script::Register::R13;
+    else if (regName == "r14") reg = Script::Register::R14;
+    else if (regName == "r15") reg = Script::Register::R15;
+#endif
+    else return false;
+
+    return true;
+}
+
+static void sendJsonErrorResponse(SOCKET clientSocket, int statusCode, const std::string& message) {
+    std::stringstream ss;
+    ss << "{\"success\":false,\"error\":\"" << escapeJsonString(message.c_str()) << "\"}";
+    sendHttpResponse(clientSocket, statusCode, "application/json", ss.str());
+}
+
+static void sendJsonMessageResponse(SOCKET clientSocket, int statusCode, bool success, const std::string& message) {
+    std::stringstream ss;
+    ss << "{\"success\":" << (success ? "true" : "false")
+       << ",\"message\":\"" << escapeJsonString(message.c_str()) << "\"}";
+    sendHttpResponse(clientSocket, statusCode, "application/json", ss.str());
+}
+
 // Escape a string for safe inclusion in a JSON string value
 std::string escapeJsonString(const char* str) {
     std::string result;
@@ -450,27 +511,23 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
             // Parse the HTTP request
             std::string method, path, query, body;
             parseHttpRequest(requestData, method, path, query, body);
-            
             _plugin_logprintf("HTTP Request: %s %s\n", method.c_str(), path.c_str());
             
             // Parse query parameters
             std::unordered_map<std::string, std::string> queryParams = parseQueryParams(query);
             std::unordered_map<std::string, std::string> bodyParams = parseQueryParams(body);
             
-            // Handle different endpoints
+                // Handle different endpoints
             try {
                 // Unified command execution endpoint
-                if (path == "/ExecCommand") {
-                    std::string cmd = queryParams["cmd"];
-                    if (cmd.empty() && !body.empty()) {
-                        cmd = body;
-                    }
-                     else {
-                        cmd = urlDecode(cmd);  
+                if (path == "/cmd") {
+                    std::string cmd = getRequestParam(queryParams, bodyParams, "command");
+                    if (!cmd.empty()) {
+                        cmd = urlDecode(cmd);
                     }
                     
                     if (cmd.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing command parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing command parameter");
                         continue;
                     }
                     
@@ -576,123 +633,60 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     }
                 }
-                                else if (path == "/IsDebugActive") {
-                    bool isRunning = DbgIsRunning();
-                    _plugin_logprintf("DbgIsRunning() called, result: %s\n", isRunning ? "true" : "false");
+                else if (path == "/status") {
+                    const bool isDebugging = DbgIsDebugging();
+                    const bool isRunning = DbgIsRunning();
                     std::stringstream ss;
-                    ss << "{\"isRunning\":" << (isRunning ? "true" : "false") << "}";
-                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
-                }
-                else if (path == "/Is_Debugging") {
-                    bool isDebugging = DbgIsDebugging();
-                    _plugin_logprintf("DbgIsDebugging() called, result: %s\n", isDebugging ? "true" : "false");
-                    std::stringstream ss;
-                    ss << "{\"isDebugging\":" << (isDebugging ? "true" : "false") << "}";
+                    ss << "{";
+                    ss << "\"arch\":\"" <<
+#ifdef _WIN64
+                        "x64"
+#else
+                        "x86"
+#endif
+                        << "\",";
+                    ss << "\"debugging\":" << (isDebugging ? "true" : "false") << ",";
+                    ss << "\"running\":" << (isRunning ? "true" : "false") << ",";
+                    ss << "\"version\":\"" << PLUGIN_VERSION << "\"";
+                    if (isDebugging) {
+                        ss << ",\"currentIp\":\"0x" << std::hex << Script::Register::Get(REG_IP) << "\"";
+                    }
+                    ss << "}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
                 // =============================================================================
                 // REGISTER API ENDPOINTS
                 // =============================================================================
-                else if (path == "/Register/Get") {
-                    std::string regName = queryParams["register"];
+                else if (path == "/register/get") {
+                    std::string regName = queryParams["name"];
                     if (regName.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing register parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing register parameter");
                         continue;
                     }
                     
-                    // Convert register name to enum (simplified mapping)
                     Script::Register::RegisterEnum reg;
-                    if (regName == "EAX" || regName == "eax") reg = Script::Register::EAX;
-                    else if (regName == "EBX" || regName == "ebx") reg = Script::Register::EBX;
-                    else if (regName == "ECX" || regName == "ecx") reg = Script::Register::ECX;
-                    else if (regName == "EDX" || regName == "edx") reg = Script::Register::EDX;
-                    else if (regName == "ESI" || regName == "esi") reg = Script::Register::ESI;
-                    else if (regName == "EDI" || regName == "edi") reg = Script::Register::EDI;
-                    else if (regName == "EBP" || regName == "ebp") reg = Script::Register::EBP;
-                    else if (regName == "ESP" || regName == "esp") reg = Script::Register::ESP;
-                    else if (regName == "EIP" || regName == "eip") reg = Script::Register::EIP;
-#ifdef _WIN64
-                    else if (regName == "RAX" || regName == "rax") reg = Script::Register::RAX;
-                    else if (regName == "RBX" || regName == "rbx") reg = Script::Register::RBX;
-                    else if (regName == "RCX" || regName == "rcx") reg = Script::Register::RCX;
-                    else if (regName == "RDX" || regName == "rdx") reg = Script::Register::RDX;
-                    else if (regName == "RSI" || regName == "rsi") reg = Script::Register::RSI;
-                    else if (regName == "RDI" || regName == "rdi") reg = Script::Register::RDI;
-                    else if (regName == "RBP" || regName == "rbp") reg = Script::Register::RBP;
-                    else if (regName == "RSP" || regName == "rsp") reg = Script::Register::RSP;
-                    else if (regName == "RIP" || regName == "rip") {
-#ifdef _WIN64
-                        reg = Script::Register::RIP;
-#else
-                        // On x86, map RIP queries to EIP for compatibility
-                        reg = Script::Register::EIP;
-#endif
-                    }
-                    else if (regName == "R8" || regName == "r8") reg = Script::Register::R8;
-                    else if (regName == "R9" || regName == "r9") reg = Script::Register::R9;
-                    else if (regName == "R10" || regName == "r10") reg = Script::Register::R10;
-                    else if (regName == "R11" || regName == "r11") reg = Script::Register::R11;
-                    else if (regName == "R12" || regName == "r12") reg = Script::Register::R12;
-                    else if (regName == "R13" || regName == "r13") reg = Script::Register::R13;
-                    else if (regName == "R14" || regName == "r14") reg = Script::Register::R14;
-                    else if (regName == "R15" || regName == "r15") reg = Script::Register::R15;
-#endif
-                    else {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Unknown register");
+                    if (!tryParseRegisterName(regName, reg)) {
+                        sendJsonErrorResponse(clientSocket, 400, "Unknown register");
                         continue;
                     }
                     
                     duint value = Script::Register::Get(reg);
                     std::stringstream ss;
-                    ss << "0x" << std::hex << value;
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                    ss << "{\"name\":\"" << escapeJsonString(regName.c_str())
+                       << "\",\"value\":\"0x" << std::hex << value << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Register/Set") {
-                    std::string regName = queryParams["register"];
+                else if (path == "/register/set") {
+                    std::string regName = queryParams["name"];
                     std::string valueStr = queryParams["value"];
                     if (regName.empty() || valueStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing register or value parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing register or value parameter");
                         continue;
                     }
                     
-                    // Convert register name to enum (same mapping as above)
                     Script::Register::RegisterEnum reg;
-                    if (regName == "EAX" || regName == "eax") reg = Script::Register::EAX;
-                    else if (regName == "EBX" || regName == "ebx") reg = Script::Register::EBX;
-                    else if (regName == "ECX" || regName == "ecx") reg = Script::Register::ECX;
-                    else if (regName == "EDX" || regName == "edx") reg = Script::Register::EDX;
-                    else if (regName == "ESI" || regName == "esi") reg = Script::Register::ESI;
-                    else if (regName == "EDI" || regName == "edi") reg = Script::Register::EDI;
-                    else if (regName == "EBP" || regName == "ebp") reg = Script::Register::EBP;
-                    else if (regName == "ESP" || regName == "esp") reg = Script::Register::ESP;
-                    else if (regName == "EIP" || regName == "eip") reg = Script::Register::EIP;
-#ifdef _WIN64
-                    else if (regName == "RAX" || regName == "rax") reg = Script::Register::RAX;
-                    else if (regName == "RBX" || regName == "rbx") reg = Script::Register::RBX;
-                    else if (regName == "RCX" || regName == "rcx") reg = Script::Register::RCX;
-                    else if (regName == "RDX" || regName == "rdx") reg = Script::Register::RDX;
-                    else if (regName == "RSI" || regName == "rsi") reg = Script::Register::RSI;
-                    else if (regName == "RDI" || regName == "rdi") reg = Script::Register::RDI;
-                    else if (regName == "RBP" || regName == "rbp") reg = Script::Register::RBP;
-                    else if (regName == "RSP" || regName == "rsp") reg = Script::Register::RSP;
-                    else if (regName == "RIP" || regName == "rip") {
-#ifdef _WIN64
-                        reg = Script::Register::RIP;
-#else
-                        reg = Script::Register::EIP;
-#endif
-                    }
-                    else if (regName == "R8" || regName == "r8") reg = Script::Register::R8;
-                    else if (regName == "R9" || regName == "r9") reg = Script::Register::R9;
-                    else if (regName == "R10" || regName == "r10") reg = Script::Register::R10;
-                    else if (regName == "R11" || regName == "r11") reg = Script::Register::R11;
-                    else if (regName == "R12" || regName == "r12") reg = Script::Register::R12;
-                    else if (regName == "R13" || regName == "r13") reg = Script::Register::R13;
-                    else if (regName == "R14" || regName == "r14") reg = Script::Register::R14;
-                    else if (regName == "R15" || regName == "r15") reg = Script::Register::R15;
-#endif
-                    else {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Unknown register");
+                    if (!tryParseRegisterName(regName, reg)) {
+                        sendJsonErrorResponse(clientSocket, 400, "Unknown register");
                         continue;
                     }
                     
@@ -704,32 +698,36 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             value = std::stoull(valueStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid value format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid value format");
                         continue;
                     }
                     
                     bool success = Script::Register::Set(reg, value);
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Register set successfully" : "Failed to set register");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"name\":\"" << escapeJsonString(regName.c_str())
+                       << "\",\"value\":\"0x" << std::hex << value << "\""
+                       << ",\"message\":\"" << (success ? "Register set successfully" : "Failed to set register") << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
-                else if (path == "/Memory/Read") {
-                    std::string addrStr = queryParams["addr"];
-                    std::string sizeStr = queryParams["size"];
+                else if (path == "/memory/read") {
+                    std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
+                    std::string sizeStr = getRequestParam(queryParams, bodyParams, "size");
                     
                     if (addrStr.empty() || sizeStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address or size");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address or size");
                         continue;
                     }
                     
                     duint addr = 0;
                     duint size = 0;
                     if (!tryParseDuint(addrStr, addr, 16) || !tryParseDuint(sizeStr, size, 10)) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address or size format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address or size format");
                         continue;
                     }
                     
                     if (size > 1024 * 1024) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Size too large");
+                        sendJsonErrorResponse(clientSocket, 400, "Size too large");
                         continue;
                     }
                     
@@ -737,60 +735,84 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     duint sizeRead = 0;
                     
                     if (!Script::Memory::Read(addr, buffer.data(), size, &sizeRead)) {
-                        sendHttpResponse(clientSocket, 500, "text/plain", "Failed to read memory");
+                        sendJsonErrorResponse(clientSocket, 500, "Failed to read memory");
                         continue;
                     }
                     
-                    std::stringstream ss;
+                    std::stringstream hexStream;
                     for (duint i = 0; i < sizeRead; i++) {
-                        ss << std::setw(2) << std::setfill('0') << std::hex << (int)buffer[i];
+                        hexStream << std::setw(2) << std::setfill('0') << std::hex << (int)buffer[i];
+                    }
+
+                    std::stringstream ss;
+                    ss << "{\"address\":\"0x" << std::hex << addr << "\","
+                       << "\"requestedSize\":\"0x" << std::hex << size << "\","
+                       << "\"bytesRead\":\"0x" << std::hex << sizeRead << "\","
+                       << "\"hex\":\"" << hexStream.str() << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
+                }
+                else if (path == "/memory/write") {
+                    std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
+                    std::string dataStr = getRequestParam(queryParams, bodyParams, "data");
+                    if (dataStr.empty() && !body.empty() && bodyParams.empty()) {
+                        dataStr = body;
                     }
                     
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
-                }
-                else if (path == "/Memory/Write") {
-                    std::string addrStr = queryParams["addr"];
-                    std::string dataStr = !body.empty() ? body : queryParams["data"];
-                    
                     if (addrStr.empty() || dataStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address or data");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address or data");
                         continue;
                     }
                     
                     duint addr = 0;
-                    try {
-                        if (addrStr.substr(0, 2) == "0x") {
-                            addr = std::stoull(addrStr.substr(2), nullptr, 16);
-                        } else {
-                            addr = std::stoull(addrStr, nullptr, 16);
+                    if (!tryParseDuint(addrStr, addr, 16)) {
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
+                        continue;
+                    }
+
+                    std::string normalizedData;
+                    normalizedData.reserve(dataStr.size());
+                    for (char ch : dataStr) {
+                        if (!std::isspace(static_cast<unsigned char>(ch))) {
+                            normalizedData += ch;
                         }
-                    } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                    }
+
+                    if (normalizedData.empty() || (normalizedData.length() % 2) != 0) {
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid data format");
                         continue;
                     }
                     
                     std::vector<unsigned char> buffer;
-                    for (size_t i = 0; i < dataStr.length(); i += 2) {
-                        if (i + 1 >= dataStr.length()) break;
-                        std::string byteString = dataStr.substr(i, 2);
+                    bool invalidData = false;
+                    for (size_t i = 0; i < normalizedData.length(); i += 2) {
+                        std::string byteString = normalizedData.substr(i, 2);
                         try {
                             unsigned char byte = (unsigned char)std::stoi(byteString, nullptr, 16);
                             buffer.push_back(byte);
-                        } catch (const std::exception& e) {
-                            sendHttpResponse(clientSocket, 400, "text/plain", "Invalid data format");
-                            continue;
+                        } catch (const std::exception&) {
+                            invalidData = true;
+                            break;
                         }
+                    }
+
+                    if (invalidData) {
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid data format");
+                        continue;
                     }
                     
                     duint sizeWritten = 0;
                     bool success = Script::Memory::Write(addr, buffer.data(), buffer.size(), &sizeWritten);
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Memory written successfully" : "Failed to write memory");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"address\":\"0x" << std::hex << addr << "\""
+                       << ",\"bytesWritten\":\"0x" << std::hex << sizeWritten << "\""
+                       << ",\"message\":\"" << (success ? "Memory written successfully" : "Failed to write memory") << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
-                else if (path == "/Memory/IsValidPtr") {
+                else if (path == "/memory/is-valid") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
@@ -802,17 +824,20 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             addr = std::stoull(addrStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
                     bool isValid = Script::Memory::IsValidPtr(addr);
-                    sendHttpResponse(clientSocket, 200, "text/plain", isValid ? "true" : "false");
+                    std::stringstream ss;
+                    ss << "{\"address\":\"0x" << std::hex << addr << "\",\"valid\":"
+                       << (isValid ? "true" : "false") << "}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Memory/GetProtect") {
+                else if (path == "/memory/protect") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
@@ -824,16 +849,16 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             addr = std::stoull(addrStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
                     unsigned int protect = Script::Memory::GetProtect(addr);
                     std::stringstream ss;
-                    ss << "0x" << std::hex << protect;
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                    ss << "{\"address\":\"0x" << std::hex << addr << "\",\"protect\":\"0x" << std::hex << protect << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Memory/SetPageRights") {
+                else if (path == "/memory/protect/set") {
                     std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
                     std::string rightsStr = getRequestParam(queryParams, bodyParams, "rights");
 
@@ -876,89 +901,83 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // DEBUG API ENDPOINTS
                 // =============================================================================
-                else if (path == "/Debug/Run") {
+                else if (path == "/debug/run") {
                     if (!DbgIsDebugging()) {
-                        sendHttpResponse(clientSocket, 200, "text/plain", "No active debug session");
+                        sendJsonMessageResponse(clientSocket, 200, false, "No active debug session");
                         continue;
                     }
 
                     if (DbgIsRunning()) {
-                        sendHttpResponse(clientSocket, 200, "text/plain", "Debugger already running");
+                        sendJsonMessageResponse(clientSocket, 200, false, "Debugger already running");
                         continue;
                     }
 
                     bool queued = DbgCmdExec("run");
-                    sendHttpResponse(clientSocket, queued ? 200 : 500, "text/plain",
+                    sendJsonMessageResponse(clientSocket, queued ? 200 : 500, queued,
                         queued ? "Debug run queued" : "Failed to queue debug run");
                 }
-                else if (path == "/Debug/Pause") {
+                else if (path == "/debug/pause") {
                     Script::Debug::Pause();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Debug pause executed");
+                    sendJsonMessageResponse(clientSocket, 200, true, "Debug pause executed");
                 }
-                else if (path == "/Debug/Stop") {
+                else if (path == "/debug/stop") {
                     Script::Debug::Stop();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Debug stop executed");
+                    sendJsonMessageResponse(clientSocket, 200, true, "Debug stop executed");
                 }
-                else if (path == "/Debug/StepIn") {
+                else if (path == "/debug/step-in") {
                     Script::Debug::StepIn();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Step in executed");
+                    sendJsonMessageResponse(clientSocket, 200, true, "Step in executed");
                 }
-                else if (path == "/Debug/StepOver") {
+                else if (path == "/debug/step-over") {
                     Script::Debug::StepOver();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Step over executed");
+                    sendJsonMessageResponse(clientSocket, 200, true, "Step over executed");
                 }
-                else if (path == "/Debug/StepOut") {
+                else if (path == "/debug/step-out") {
                     Script::Debug::StepOut();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Step out executed");
+                    sendJsonMessageResponse(clientSocket, 200, true, "Step out executed");
                 }
-                else if (path == "/Debug/SetBreakpoint") {
-                    std::string addrStr = queryParams["addr"];
+                else if (path == "/breakpoint/set") {
+                    std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
                     duint addr = 0;
-                    try {
-                        if (addrStr.substr(0, 2) == "0x") {
-                            addr = std::stoull(addrStr.substr(2), nullptr, 16);
-                        } else {
-                            addr = std::stoull(addrStr, nullptr, 16);
-                        }
-                    } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                    if (!tryParseDuint(addrStr, addr, 16)) {
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
                     bool success = Script::Debug::SetBreakpoint(addr);
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Breakpoint set successfully" : "Failed to set breakpoint");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"address\":\"0x" << std::hex << addr << "\""
+                       << ",\"message\":\"" << (success ? "Breakpoint set successfully" : "Failed to set breakpoint") << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
-                else if (path == "/Debug/DeleteBreakpoint") {
-                    std::string addrStr = queryParams["addr"];
+                else if (path == "/breakpoint/delete") {
+                    std::string addrStr = getRequestParam(queryParams, bodyParams, "addr");
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
                     duint addr = 0;
-                    try {
-                        if (addrStr.substr(0, 2) == "0x") {
-                            addr = std::stoull(addrStr.substr(2), nullptr, 16);
-                        } else {
-                            addr = std::stoull(addrStr, nullptr, 16);
-                        }
-                    } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                    if (!tryParseDuint(addrStr, addr, 16)) {
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
                     bool success = Script::Debug::DeleteBreakpoint(addr);
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Breakpoint deleted successfully" : "Failed to delete breakpoint");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"address\":\"0x" << std::hex << addr << "\""
+                       << ",\"message\":\"" << (success ? "Breakpoint deleted successfully" : "Failed to delete breakpoint") << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
                 
-                else if (path == "/Assembler/Assemble") {
+                else if (path == "/assembler/assemble") {
                     std::string addrStr = queryParams["addr"];
                     std::string instruction = queryParams["instruction"];
                     if (instruction.empty() && !body.empty()) {
@@ -966,7 +985,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     }
                     
                     if (addrStr.empty() || instruction.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address or instruction parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address or instruction parameter");
                         continue;
                     }
                     
@@ -978,7 +997,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             addr = std::stoull(addrStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
@@ -995,10 +1014,10 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         ss << "\"}";
                         sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     } else {
-                        sendHttpResponse(clientSocket, 500, "text/plain", "Failed to assemble instruction");
+                        sendJsonErrorResponse(clientSocket, 500, "Failed to assemble instruction");
                     }
                 }
-                else if (path == "/Assembler/AssembleMem") {
+                else if (path == "/assembler/write") {
                     std::string addrStr = queryParams["addr"];
                     std::string instruction = queryParams["instruction"];
                     if (instruction.empty() && !body.empty()) {
@@ -1006,7 +1025,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     }
                     
                     if (addrStr.empty() || instruction.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address or instruction parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address or instruction parameter");
                         continue;
                     }
                     
@@ -1018,24 +1037,29 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             addr = std::stoull(addrStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
                     bool success = Script::Assembler::AssembleMem(addr, instruction.c_str());
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Instruction assembled in memory successfully" : "Failed to assemble instruction in memory");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"address\":\"0x" << std::hex << addr << "\""
+                       << ",\"message\":\""
+                       << (success ? "Instruction assembled in memory successfully" : "Failed to assemble instruction in memory")
+                       << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
-                else if (path == "/Stack/Pop") {
+                else if (path == "/stack/pop") {
                     duint value = Script::Stack::Pop();
                     std::stringstream ss;
-                    ss << "0x" << std::hex << value;
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                    ss << "{\"value\":\"0x" << std::hex << value << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Stack/Push") {
+                else if (path == "/stack/push") {
                     std::string valueStr = queryParams["value"];
                     if (valueStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing value parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing value parameter");
                         continue;
                     }
                     
@@ -1047,36 +1071,36 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             value = std::stoull(valueStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid value format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid value format");
                         continue;
                     }
                     
                     duint prevTop = Script::Stack::Push(value);
                     std::stringstream ss;
-                    ss << "0x" << std::hex << prevTop;
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                    ss << "{\"previousTop\":\"0x" << std::hex << prevTop << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Stack/Peek") {
+                else if (path == "/stack/peek") {
                     std::string offsetStr = queryParams["offset"];
                     int offset = 0;
                     if (!offsetStr.empty()) {
                         try {
                             offset = std::stoi(offsetStr);
                         } catch (const std::exception& e) {
-                            sendHttpResponse(clientSocket, 400, "text/plain", "Invalid offset format");
+                            sendJsonErrorResponse(clientSocket, 400, "Invalid offset format");
                             continue;
                         }
                     }
                     
                     duint value = Script::Stack::Peek(offset);
                     std::stringstream ss;
-                    ss << "0x" << std::hex << value;
-                    sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                    ss << "{\"offset\":" << std::dec << offset << ",\"value\":\"0x" << std::hex << value << "\"}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Disasm/GetInstruction") {
+                else if (path == "/disasm/instruction") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
@@ -1088,7 +1112,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             addr = std::stoull(addrStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     
@@ -1100,12 +1124,12 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Disasm/GetInstructionRange") {
+                else if (path == "/disasm/range") {
                     std::string addrStr = queryParams["addr"];
                     std::string countStr = queryParams["count"];
                     
                     if (addrStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing address parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing address parameter");
                         continue;
                     }
                     
@@ -1123,12 +1147,12 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             count = std::stoi(countStr);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address or count format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address or count format");
                         continue;
                     }
                     
                     if (count <= 0 || count > 100) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Count must be between 1 and 100");
+                        sendJsonErrorResponse(clientSocket, 400, "Count must be between 1 and 100");
                         continue;
                     }
                     
@@ -1155,7 +1179,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     ss << "]";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Disasm/StepInWithDisasm") {
+                else if (path == "/disasm/step-into") {
                     // Step in first
                     Script::Debug::StepIn();
                     
@@ -1180,10 +1204,10 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // FLAG API ENDPOINTS
                 // =============================================================================
-                else if (path == "/Flag/Get") {
+                else if (path == "/flag/get") {
                     std::string flagName = queryParams["flag"];
                     if (flagName.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing flag parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing flag parameter");
                         continue;
                     }
                     
@@ -1198,17 +1222,19 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     else if (flagName == "DF" || flagName == "df") value = Script::Flag::GetDF();
                     else if (flagName == "IF" || flagName == "if") value = Script::Flag::GetIF();
                     else {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Unknown flag");
+                        sendJsonErrorResponse(clientSocket, 400, "Unknown flag");
                         continue;
                     }
                     
-                    sendHttpResponse(clientSocket, 200, "text/plain", value ? "true" : "false");
+                    std::stringstream ss;
+                    ss << "{\"flag\":\"" << flagName << "\",\"value\":" << (value ? "true" : "false") << "}";
+                    sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Flag/Set") {
+                else if (path == "/flag/set") {
                     std::string flagName = queryParams["flag"];
                     std::string valueStr = queryParams["value"];
                     if (flagName.empty() || valueStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing flag or value parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing flag or value parameter");
                         continue;
                     }
                     
@@ -1225,24 +1251,28 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     else if (flagName == "DF" || flagName == "df") success = Script::Flag::SetDF(value);
                     else if (flagName == "IF" || flagName == "if") success = Script::Flag::SetIF(value);
                     else {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Unknown flag");
+                        sendJsonErrorResponse(clientSocket, 400, "Unknown flag");
                         continue;
                     }
                     
-                    sendHttpResponse(clientSocket, success ? 200 : 500, "text/plain", 
-                        success ? "Flag set successfully" : "Failed to set flag");
+                    std::stringstream ss;
+                    ss << "{\"success\":" << (success ? "true" : "false")
+                       << ",\"flag\":\"" << flagName << "\""
+                       << ",\"value\":" << (value ? "true" : "false")
+                       << ",\"message\":\"" << (success ? "Flag set successfully" : "Failed to set flag") << "\"}";
+                    sendHttpResponse(clientSocket, success ? 200 : 500, "application/json", ss.str());
                 }
                 
                 // =============================================================================
                 // PATTERN API ENDPOINTS
                 // =============================================================================
-                else if (path == "/Pattern/FindMem") {
+                else if (path == "/pattern/find") {
                     std::string startStr = queryParams["start"];
                     std::string sizeStr = queryParams["size"];
                     std::string pattern = queryParams["pattern"];
                     std::string Pattern = urlDecode(pattern);
                     if (startStr.empty() || sizeStr.empty() || pattern.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing start, size, or pattern parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing start, size, or pattern parameter");
                         continue;
                     }
                     
@@ -1264,28 +1294,28 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             size = std::stoull(sizeStr, nullptr, 16);
                         }
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid start or size format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid start or size format");
                         continue;
                     }
                     
                     duint result = Script::Pattern::FindMem(start, size, Pattern.c_str());
                     if (result != 0) {
                         std::stringstream ss;
-                        ss << "0x" << std::hex << result;
-                        sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                        ss << "{\"found\":true,\"address\":\"0x" << std::hex << result << "\"}";
+                        sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     } else {
-                        sendHttpResponse(clientSocket, 404, "text/plain", "Pattern not found");
+                        sendJsonErrorResponse(clientSocket, 404, "Pattern not found");
                     }
                 }
                 
-                else if (path == "/Misc/ParseExpression") {
+                else if (path == "/expression/parse") {
                     std::string expression = queryParams["expression"];
                     if (expression.empty() && !body.empty()) {
                         expression = body;
                     }
                     
                     if (expression.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing expression parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing expression parameter");
                         continue;
                     }
                     
@@ -1294,31 +1324,33 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     
                     if (success) {
                         std::stringstream ss;
-                        ss << "0x" << std::hex << value;
-                        sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                        ss << "{\"expression\":\"" << escapeJsonString(expression.c_str()) << "\",\"value\":\"0x" << std::hex << value << "\"}";
+                        sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     } else {
-                        sendHttpResponse(clientSocket, 500, "text/plain", "Failed to parse expression");
+                        sendJsonErrorResponse(clientSocket, 500, "Failed to parse expression");
                     }
                 }
-                else if (path == "/Misc/RemoteGetProcAddress") {
+                else if (path == "/module/proc-address") {
                     std::string module = queryParams["module"];
                     std::string api = queryParams["api"];
                     
                     if (module.empty() || api.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing module or api parameter");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing module or api parameter");
                         continue;
                     }
                     
                     duint addr = Script::Misc::RemoteGetProcAddress(module.c_str(), api.c_str());
                     if (addr != 0) {
                         std::stringstream ss;
-                        ss << "0x" << std::hex << addr;
-                        sendHttpResponse(clientSocket, 200, "text/plain", ss.str());
+                        ss << "{\"module\":\"" << escapeJsonString(module.c_str()) << "\","
+                           << "\"api\":\"" << escapeJsonString(api.c_str()) << "\","
+                           << "\"address\":\"0x" << std::hex << addr << "\"}";
+                        sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     } else {
-                        sendHttpResponse(clientSocket, 404, "text/plain", "Function not found");
+                        sendJsonErrorResponse(clientSocket, 404, "Function not found");
                     }
                 }
-                else if (path == "/MemoryBase") {
+                else if (path == "/module/by-address") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty() && !body.empty()) {
                         addrStr = body;
@@ -1330,7 +1362,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         addr = std::stoull(addrStr, nullptr, 16); // Parse as hex
                     }
                     catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid address format");
                         continue;
                     }
                     _plugin_logprintf("Converted address: " FMT_DUINT_HEX "\n", DUINT_CAST_PRINTF(addr));
@@ -1340,7 +1372,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     duint baseAddr = DbgMemFindBaseAddr(addr, &size);
                     _plugin_logprintf("Base address found: " FMT_DUINT_HEX ", size: " FMT_DUINT_DEC "\n", DUINT_CAST_PRINTF(baseAddr), DUSIZE_CAST_PRINTF(size));
                     if (baseAddr == 0) {
-                        sendHttpResponse(clientSocket, 404, "text/plain", "No module found for this address");
+                        sendJsonErrorResponse(clientSocket, 404, "No module found for this address");
                     }
                     else {
                         // Format the response as JSON
@@ -1349,7 +1381,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     }
                 }
-                else if (path == "/GetModuleList") {
+                else if (path == "/modules") {
                     // Create a list to store the module information
                     ListInfo moduleList;
                     
@@ -1357,7 +1389,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     bool success = Script::Module::GetList(&moduleList);
                     
                     if (!success) {
-                        sendHttpResponse(clientSocket, 500, "text/plain", "Failed to get module list");
+                        sendJsonErrorResponse(clientSocket, 500, "Failed to get module list");
                     }
                     else {
                         // Create a JSON array to hold the module information
@@ -1394,7 +1426,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // SYMBOL ENUMERATION ENDPOINT
                 // =============================================================================
-                else if (path == "/SymbolEnum") {
+                else if (path == "/symbols") {
                     // Module name is required to keep response sizes manageable
                     std::string moduleFilter = queryParams["module"];
                     if (moduleFilter.empty()) {
@@ -1508,7 +1540,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // THREAD API ENDPOINTS
                 // =============================================================================
-                else if (path == "/GetThreadList") {
+                else if (path == "/threads") {
                     THREADLIST threadList;
                     memset(&threadList, 0, sizeof(threadList));
                     DbgGetThreadList(&threadList);
@@ -1590,10 +1622,10 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     
                     sendHttpResponse(clientSocket, 200, "application/json", jsonResponse.str());
                 }
-                else if (path == "/GetTebAddress") {
+                else if (path == "/thread/teb") {
                     std::string tidStr = queryParams["tid"];
                     if (tidStr.empty()) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Missing 'tid' parameter (thread ID)");
+                        sendJsonErrorResponse(clientSocket, 400, "Missing 'tid' parameter (thread ID)");
                         continue;
                     }
                     
@@ -1601,7 +1633,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     try {
                         tid = (DWORD)std::stoul(tidStr, nullptr, 0);
                     } catch (const std::exception& e) {
-                        sendHttpResponse(clientSocket, 400, "text/plain", "Invalid tid format");
+                        sendJsonErrorResponse(clientSocket, 400, "Invalid tid format");
                         continue;
                     }
                     
@@ -1620,7 +1652,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // STRING API ENDPOINTS
                 // =============================================================================
-                else if (path == "/String/GetAt") {
+                else if (path == "/string/at") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -1649,7 +1681,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // XREF API ENDPOINTS
                 // =============================================================================
-                else if (path == "/Xref/Get") {
+                else if (path == "/xref/list") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -1707,7 +1739,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     ss << "]}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Xref/Count") {
+                else if (path == "/xref/count") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -1734,7 +1766,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // MEMORY MAP ENDPOINT
                 // =============================================================================
-                else if (path == "/GetMemoryMap") {
+                else if (path == "/memory/map") {
                     MEMMAP memmap;
                     memset(&memmap, 0, sizeof(memmap));
                     bool success = DbgMemMap(&memmap);
@@ -1783,7 +1815,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // REMOTE MEMORY ALLOC/FREE ENDPOINTS
                 // =============================================================================
-                else if (path == "/Memory/RemoteAlloc") {
+                else if (path == "/memory/alloc") {
                     std::string addrStr = queryParams["addr"];
                     std::string sizeStr = queryParams["size"];
                     
@@ -1816,7 +1848,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                         sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                     }
                 }
-                else if (path == "/Memory/RemoteFree") {
+                else if (path == "/memory/free") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -1841,7 +1873,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // BRANCH DESTINATION ENDPOINT
                 // =============================================================================
-                else if (path == "/GetBranchDestination") {
+                else if (path == "/branch/destination") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -1869,7 +1901,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // CALL STACK ENDPOINT
                 // =============================================================================
-                else if (path == "/GetCallStack") {
+                else if (path == "/callstack") {
                     const DBGFUNCTIONS* dbgFunc = DbgFunctions();
                     if (!dbgFunc || !dbgFunc->GetCallStackEx) {
                         sendHttpResponse(clientSocket, 500, "application/json",
@@ -1902,7 +1934,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // BREAKPOINT LIST ENDPOINT
                 // =============================================================================
-                else if (path == "/Breakpoint/List") {
+                else if (path == "/breakpoint/list") {
                     std::string typeStr = queryParams["type"];
                     
                     // Default to listing all breakpoint types
@@ -1972,7 +2004,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // LABEL GET/SET ENDPOINTS
                 // =============================================================================
-                else if (path == "/Label/Set") {
+                else if (path == "/label/set") {
                     std::string addrStr = queryParams["addr"];
                     std::string text = queryParams["text"];
                     if (!body.empty() && text.empty()) text = body;
@@ -2000,7 +2032,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                        << "\"label\":\"" << escapeJsonString(text.c_str()) << "\"}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Label/Get") {
+                else if (path == "/label/get") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -2026,7 +2058,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                        << "\"label\":\"" << escapeJsonString(text) << "\"}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Label/List") {
+                else if (path == "/label/list") {
                     ListInfo labelList;
                     bool success = Script::Label::GetList(&labelList);
                     
@@ -2057,7 +2089,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // COMMENT GET/SET ENDPOINTS
                 // =============================================================================
-                else if (path == "/Comment/Set") {
+                else if (path == "/comment/set") {
                     std::string addrStr = queryParams["addr"];
                     std::string text = queryParams["text"];
                     if (!body.empty() && text.empty()) text = body;
@@ -2084,7 +2116,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                        << "\"address\":\"0x" << std::hex << addr << "\"}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Comment/Get") {
+                else if (path == "/comment/get") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -2113,7 +2145,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // REGISTER DUMP ENDPOINT
                 // =============================================================================
-                else if (path == "/RegisterDump") {
+                else if (path == "/registers") {
                     REGDUMP regdump;
                     memset(&regdump, 0, sizeof(regdump));
                     bool success = DbgGetRegDumpEx(&regdump, sizeof(regdump));
@@ -2190,7 +2222,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // HARDWARE BREAKPOINT ENDPOINTS
                 // =============================================================================
-                else if (path == "/Debug/SetHardwareBreakpoint") {
+                else if (path == "/breakpoint/hardware/set") {
                     std::string addrStr = queryParams["addr"];
                     std::string typeStr = queryParams["type"]; // access, write, execute
                     
@@ -2220,7 +2252,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                        << "\"address\":\"0x" << std::hex << addr << "\"}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Debug/DeleteHardwareBreakpoint") {
+                else if (path == "/breakpoint/hardware/delete") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -2246,7 +2278,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // ENUM TCP CONNECTIONS ENDPOINT
                 // =============================================================================
-                else if (path == "/EnumTcpConnections") {
+                else if (path == "/network/tcp") {
                     const DBGFUNCTIONS* dbgFunc = DbgFunctions();
                     if (!dbgFunc || !dbgFunc->EnumTcpConnections) {
                         sendHttpResponse(clientSocket, 500, "application/json",
@@ -2285,7 +2317,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // PATCH ENUM/GET ENDPOINTS
                 // =============================================================================
-                else if (path == "/Patch/List") {
+                else if (path == "/patch/list") {
                     const DBGFUNCTIONS* dbgFunc = DbgFunctions();
                     if (!dbgFunc || !dbgFunc->PatchEnum) {
                         sendHttpResponse(clientSocket, 500, "application/json",
@@ -2326,7 +2358,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     ss << "]}";
                     sendHttpResponse(clientSocket, 200, "application/json", ss.str());
                 }
-                else if (path == "/Patch/Get") {
+                else if (path == "/patch/get") {
                     std::string addrStr = queryParams["addr"];
                     if (addrStr.empty()) {
                         sendHttpResponse(clientSocket, 400, "application/json",
@@ -2376,7 +2408,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // =============================================================================
                 // ENUM HANDLES ENDPOINT
                 // =============================================================================
-                else if (path == "/EnumHandles") {
+                else if (path == "/handles") {
                     const DBGFUNCTIONS* dbgFunc = DbgFunctions();
                     if (!dbgFunc || !dbgFunc->EnumHandles) {
                         sendHttpResponse(clientSocket, 500, "application/json",
@@ -2424,7 +2456,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
             }
             catch (const std::exception& e) {
                 // Exception in handling request
-                sendHttpResponse(clientSocket, 500, "text/plain", std::string("Internal Server Error: ") + e.what());
+                sendJsonErrorResponse(clientSocket, 500, std::string("Internal Server Error: ") + e.what());
             }
         }
         
