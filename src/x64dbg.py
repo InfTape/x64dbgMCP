@@ -284,7 +284,7 @@ def MemoryRead(addr: str, size: str) -> str:
     
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
-        size: Number of bytes to read
+        size: Number of bytes to read (decimal or 0x-prefixed hex)
     
     Returns:
         Hexadecimal string representing the memory contents

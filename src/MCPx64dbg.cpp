@@ -217,6 +217,37 @@ std::string urlDecode(const std::string& str) {
     return decoded;
 }
 
+static bool hasHexPrefix(const std::string& value) {
+    return value.length() > 2 &&
+           value[0] == '0' &&
+           (value[1] == 'x' || value[1] == 'X');
+}
+
+static bool tryParseDuint(const std::string& value, duint& parsedValue, int defaultBase = 16) {
+    if (value.empty()) {
+        return false;
+    }
+
+    try {
+        const bool prefixedHex = hasHexPrefix(value);
+        const std::string digits = prefixedHex ? value.substr(2) : value;
+        if (digits.empty()) {
+            return false;
+        }
+
+        size_t consumed = 0;
+        unsigned long long parsed = std::stoull(digits, &consumed, prefixedHex ? 16 : defaultBase);
+        if (consumed != digits.length()) {
+            return false;
+        }
+
+        parsedValue = static_cast<duint>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 // Escape a string for safe inclusion in a JSON string value
 std::string escapeJsonString(const char* str) {
     std::string result;
@@ -591,14 +622,7 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                     
                     duint addr = 0;
                     duint size = 0;
-                    try {
-                        if (addrStr.substr(0, 2) == "0x") {
-                            addr = std::stoull(addrStr.substr(2), nullptr, 16);
-                        } else {
-                            addr = std::stoull(addrStr, nullptr, 16);
-                        }
-                        size = std::stoull(sizeStr, nullptr, 10);
-                    } catch (const std::exception& e) {
+                    if (!tryParseDuint(addrStr, addr, 16) || !tryParseDuint(sizeStr, size, 10)) {
                         sendHttpResponse(clientSocket, 400, "text/plain", "Invalid address or size format");
                         continue;
                     }
