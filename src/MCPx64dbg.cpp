@@ -1354,12 +1354,12 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                             
                             // Add module info as JSON object
                             jsonResponse << "{";
-                            jsonResponse << "\"name\":\"" << modules[i].name << "\",";
+                            jsonResponse << "\"name\":\"" << escapeJsonString(modules[i].name) << "\",";
                             jsonResponse << "\"base\":\"0x" << std::hex << modules[i].base << "\",";
                             jsonResponse << "\"size\":\"0x" << std::hex << modules[i].size << "\",";
                             jsonResponse << "\"entry\":\"0x" << std::hex << modules[i].entry << "\",";
                             jsonResponse << "\"sectionCount\":" << std::dec << modules[i].sectionCount << ",";
-                            jsonResponse << "\"path\":\"" << modules[i].path << "\"";
+                            jsonResponse << "\"path\":\"" << escapeJsonString(modules[i].path) << "\"";
                             jsonResponse << "}";
                         }
                         
@@ -2514,7 +2514,7 @@ void sendHttpResponse(SOCKET clientSocket, int statusCode, const std::string& co
     send(clientSocket, responseStr.c_str(), (int)responseStr.length(), 0);
 }
 
-// Parse query parameters from URL
+// Parse query or form-urlencoded parameters and URL-decode key/value pairs.
 std::unordered_map<std::string, std::string> parseQueryParams(const std::string& query) {
     std::unordered_map<std::string, std::string> params;
     
@@ -2531,8 +2531,8 @@ std::unordered_map<std::string, std::string> parseQueryParams(const std::string&
         size_t equalPos = pair.find('=');
         
         if (equalPos != std::string::npos) {
-            std::string key = pair.substr(0, equalPos);
-            std::string value = pair.substr(equalPos + 1);
+            std::string key = urlDecode(pair.substr(0, equalPos));
+            std::string value = urlDecode(pair.substr(equalPos + 1));
             params[key] = value;
         }
         
