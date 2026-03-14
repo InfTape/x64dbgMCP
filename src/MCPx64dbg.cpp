@@ -877,8 +877,19 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
                 // DEBUG API ENDPOINTS
                 // =============================================================================
                 else if (path == "/Debug/Run") {
-                    Script::Debug::Run();
-                    sendHttpResponse(clientSocket, 200, "text/plain", "Debug run executed");
+                    if (!DbgIsDebugging()) {
+                        sendHttpResponse(clientSocket, 200, "text/plain", "No active debug session");
+                        continue;
+                    }
+
+                    if (DbgIsRunning()) {
+                        sendHttpResponse(clientSocket, 200, "text/plain", "Debugger already running");
+                        continue;
+                    }
+
+                    bool queued = DbgCmdExec("run");
+                    sendHttpResponse(clientSocket, queued ? 200 : 500, "text/plain",
+                        queued ? "Debug run queued" : "Failed to queue debug run");
                 }
                 else if (path == "/Debug/Pause") {
                     Script::Debug::Pause();

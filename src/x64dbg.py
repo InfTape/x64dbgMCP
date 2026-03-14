@@ -9,6 +9,12 @@ from mcp.server.fastmcp import FastMCP
 
 DEFAULT_X64DBG_SERVER = "http://127.0.0.1:8888/"
 
+# Timeout configurations for different operation types
+TIMEOUT_FAST = 5
+TIMEOUT_NORMAL = 30
+TIMEOUT_DEBUG = 120
+TIMEOUT_RUN = 15
+
 def _resolve_server_url_from_args_env() -> str:
     env_url = os.getenv("X64DBG_URL")
     if env_url and env_url.startswith("http"):
@@ -26,7 +32,7 @@ def set_x64dbg_server_url(url: str) -> None:
 
 mcp = FastMCP("x64dbg-mcp")
 
-def safe_get(endpoint: str, params: dict = None):
+def safe_get(endpoint: str, params: dict = None, timeout: int = TIMEOUT_NORMAL):
     """
     Perform a GET request with optional query parameters.
     Returns parsed JSON if possible, otherwise text content
@@ -37,7 +43,7 @@ def safe_get(endpoint: str, params: dict = None):
     url = f"{x64dbg_server_url}{endpoint}"
 
     try:
-        response = requests.get(url, params=params, timeout=15)
+        response = requests.get(url, params=params, timeout=timeout)
         response.encoding = 'utf-8'
         if response.ok:
             # Try to parse as JSON first
@@ -50,7 +56,7 @@ def safe_get(endpoint: str, params: dict = None):
     except Exception as e:
         return f"Request failed: {str(e)}"
 
-def safe_post(endpoint: str, data: dict | str):
+def safe_post(endpoint: str, data: dict | str, timeout: int = TIMEOUT_NORMAL):
     """
     Perform a POST request with data.
     Returns parsed JSON if possible, otherwise text content
@@ -58,9 +64,9 @@ def safe_post(endpoint: str, data: dict | str):
     try:
         url = f"{x64dbg_server_url}{endpoint}"
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            response = requests.post(url, data=data, timeout=timeout)
         else:
-            response = requests.post(url, data=data.encode("utf-8"), timeout=5)
+            response = requests.post(url, data=data.encode("utf-8"), timeout=timeout)
         
         response.encoding = 'utf-8'
         
@@ -74,6 +80,61 @@ def safe_post(endpoint: str, data: dict | str):
             return f"Error {response.status_code}: {response.text.strip()}"
     except Exception as e:
         return f"Request failed: {str(e)}"
+
+
+def _try_parse_int(value: str) -> int | None:
+    try:
+        return int(value, 0)
+    except Exception:
+        return None
+
+
+def _format_memory_read_result(addr: str, size: str, raw_hex: str) -> Dict[str, Any]:
+    normalized = "".join(raw_hex.split()).lower()
+    if len(normalized) % 2 != 0:
+        return {
+            "address": addr,
+            "requestedSize": size,
+            "bytesRead": None,
+            "hex": raw_hex,
+            "warning": "Memory read returned an odd-length hex string",
+        }
+
+    byte_values = [normalized[i:i + 2] for i in range(0, len(normalized), 2)]
+    base_addr = _try_parse_int(addr)
+    bytes_read = len(byte_values)
+    rows: List[Dict[str, Any]] = []
+
+    for row_offset in range(0, bytes_read, 16):
+        row_bytes = byte_values[row_offset:row_offset + 16]
+        dwords_le = []
+        for dword_offset in range(0, len(row_bytes), 4):
+            dword_bytes = row_bytes[dword_offset:dword_offset + 4]
+            if len(dword_bytes) == 4:
+                dwords_le.append("0x" + "".join(reversed(dword_bytes)).upper())
+
+        ascii_preview = "".join(
+            chr(int(byte, 16)) if 32 <= int(byte, 16) <= 126 else "."
+            for byte in row_bytes
+        )
+
+        row: Dict[str, Any] = {
+            "offset": f"0x{row_offset:X}",
+            "hex": " ".join(row_bytes),
+            "dwordsLE": dwords_le,
+            "ascii": ascii_preview,
+        }
+        if base_addr is not None:
+            row["address"] = f"0x{base_addr + row_offset:X}"
+        rows.append(row)
+
+    return {
+        "address": addr,
+        "requestedSize": size,
+        "bytesRead": f"0x{bytes_read:X}",
+        "hex": normalized,
+        "rows": rows,
+    }
 
 # =============================================================================
 # TOOL REGISTRY INTROSPECTION (for CLI/Claude tool-use)
@@ -278,7 +339,7 @@ def RegisterSet(register: str, value: str) -> str:
 # =============================================================================
 
 @mcp.tool()
-def MemoryRead(addr: str, size: str) -> str:
+def MemoryRead(addr: str, size: str) -> Dict[str, Any]:
     """
     Read memory using enhanced Script API
     
@@ -287,9 +348,23 @@ def MemoryRead(addr: str, size: str) -> str:
         size: Number of bytes to read (decimal or 0x-prefixed hex)
     
     Returns:
-        Hexadecimal string representing the memory contents
+        Dictionary containing the raw hex string and row-based formatted output
     """
-    return safe_get("Memory/Read", {"addr": addr, "size": size})
+    result = safe_get("Memory/Read", {"addr": addr, "size": size})
+    if not isinstance(result, str):
+        return {
+            "address": addr,
+            "requestedSize": size,
+            "error": "Unexpected Memory/Read response type",
+            "raw": result,
+        }
+    if result.startswith("Error ") or result.startswith("Request failed:"):
+        return {
+            "address": addr,
+            "requestedSize": size,
+            "error": result,
+        }
+    return _format_memory_read_result(addr, size, result)
 
 @mcp.tool()
 def MemoryWrite(addr: str, data: str) -> str:
@@ -346,7 +421,10 @@ def DebugRun() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/Run")
+    state = safe_get("IsDebugActive", timeout=TIMEOUT_FAST)
+    if isinstance(state, dict) and state.get("isRunning") is True:
+        return "Debugger already running"
+    return safe_get("Debug/Run", timeout=TIMEOUT_RUN)
 
 @mcp.tool()
 def DebugPause() -> str:
@@ -356,7 +434,7 @@ def DebugPause() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/Pause")
+    return safe_get("Debug/Pause", timeout=TIMEOUT_DEBUG)
 
 @mcp.tool()
 def DebugStop() -> str:
@@ -366,7 +444,7 @@ def DebugStop() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/Stop")
+    return safe_get("Debug/Stop", timeout=TIMEOUT_DEBUG)
 
 @mcp.tool()
 def DebugStepIn() -> str:
@@ -376,7 +454,7 @@ def DebugStepIn() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/StepIn")
+    return safe_get("Debug/StepIn", timeout=TIMEOUT_DEBUG)
 
 @mcp.tool()
 def DebugStepOver() -> str:
@@ -386,7 +464,7 @@ def DebugStepOver() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/StepOver")
+    return safe_get("Debug/StepOver", timeout=TIMEOUT_DEBUG)
 
 @mcp.tool()
 def DebugStepOut() -> str:
@@ -396,7 +474,7 @@ def DebugStepOut() -> str:
     Returns:
         Status message
     """
-    return safe_get("Debug/StepOut")
+    return safe_get("Debug/StepOut", timeout=TIMEOUT_DEBUG)
 
 @mcp.tool()
 def DebugSetBreakpoint(addr: str) -> str:
@@ -632,7 +710,7 @@ def StepInWithDisasm() -> dict:
     Returns:
         Dictionary containing step result and current instruction info
     """
-    result = safe_get("Disasm/StepInWithDisasm")
+    result = safe_get("Disasm/StepInWithDisasm", timeout=TIMEOUT_DEBUG)
     if isinstance(result, dict):
         return result
     elif isinstance(result, str):

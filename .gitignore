@@ -2,4 +2,6 @@ build/
 build-*/
 build32/
 build64/
+__pycache__/
+*.pyc
 mcp_features.md
