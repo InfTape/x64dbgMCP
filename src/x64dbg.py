@@ -12,6 +12,7 @@ TIMEOUT_NORMAL = 30
 TIMEOUT_DEBUG = 120
 TIMEOUT_RUN = 15
 
+
 def _normalize_server_url(url: str) -> str:
     normalized = url.strip()
     if not normalized:
@@ -27,6 +28,7 @@ def _resolve_server_url() -> str:
         return _normalize_server_url(env_url)
     return DEFAULT_X64DBG_SERVER
 
+
 x64dbg_server_url = _resolve_server_url()
 
 mcp = FastMCP("x64dbg-mcp")
@@ -35,12 +37,15 @@ mcp = FastMCP("x64dbg-mcp")
 class DebuggerError(Exception):
     """Raised when the HTTP bridge cannot complete a debugger operation."""
 
+
 def _parse_json_response(endpoint: str, response: requests.Response) -> Any:
     response.encoding = "utf-8"
     response_text = response.text.strip()
     if not response.ok:
         detail = response_text or response.reason or "HTTP request failed"
-        raise DebuggerError(f"{endpoint} failed with HTTP {response.status_code}: {detail}")
+        raise DebuggerError(
+            f"{endpoint} failed with HTTP {response.status_code}: {detail}"
+        )
     try:
         return response.json()
     except ValueError as exc:
@@ -48,7 +53,11 @@ def _parse_json_response(endpoint: str, response: requests.Response) -> Any:
         raise DebuggerError(f"{endpoint} returned invalid JSON: {detail}") from exc
 
 
-def safe_get(endpoint: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> Any:
+def safe_get(
+    endpoint: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> Any:
     if params is None:
         params = {}
     url = f"{x64dbg_server_url}{endpoint}"
@@ -59,7 +68,9 @@ def safe_get(endpoint: str, params: Optional[Dict[str, str]] = None, timeout: in
     return _parse_json_response(endpoint, response)
 
 
-def safe_post(endpoint: str, data: Dict[str, str] | str, timeout: int = TIMEOUT_NORMAL) -> Any:
+def safe_post(
+    endpoint: str, data: Dict[str, str] | str, timeout: int = TIMEOUT_NORMAL
+) -> Any:
     url = f"{x64dbg_server_url}{endpoint}"
     try:
         if isinstance(data, dict):
@@ -85,13 +96,17 @@ def _message_from_result(endpoint: str, result: Any, default: str) -> str:
 def _require_json_object(endpoint: str, result: Any) -> Dict[str, Any]:
     if isinstance(result, dict):
         return result
-    raise DebuggerError(f"{endpoint} returned unsupported response type: {type(result).__name__}")
+    raise DebuggerError(
+        f"{endpoint} returned unsupported response type: {type(result).__name__}"
+    )
 
 
 def _require_json_list(endpoint: str, result: Any) -> List[Any]:
     if isinstance(result, list):
         return result
-    raise DebuggerError(f"{endpoint} returned unsupported response type: {type(result).__name__}")
+    raise DebuggerError(
+        f"{endpoint} returned unsupported response type: {type(result).__name__}"
+    )
 
 
 def _string_field_from_result(endpoint: str, result: Any, field: str) -> str:
@@ -110,28 +125,65 @@ def _bool_field_from_result(endpoint: str, result: Any, field: str) -> bool:
     raise DebuggerError(f"{endpoint} missing boolean field '{field}': {payload}")
 
 
-def _object_get(endpoint: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> Dict[str, Any]:
-    return _require_json_object(endpoint, safe_get(endpoint, params=params, timeout=timeout))
+def _object_get(
+    endpoint: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> Dict[str, Any]:
+    return _require_json_object(
+        endpoint, safe_get(endpoint, params=params, timeout=timeout)
+    )
 
 
-def _list_get(endpoint: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> List[Any]:
-    return _require_json_list(endpoint, safe_get(endpoint, params=params, timeout=timeout))
+def _list_get(
+    endpoint: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> List[Any]:
+    return _require_json_list(
+        endpoint, safe_get(endpoint, params=params, timeout=timeout)
+    )
 
 
-def _object_post(endpoint: str, data: Dict[str, str] | str, timeout: int = TIMEOUT_NORMAL) -> Dict[str, Any]:
-    return _require_json_object(endpoint, safe_post(endpoint, data=data, timeout=timeout))
+def _object_post(
+    endpoint: str, data: Dict[str, str] | str, timeout: int = TIMEOUT_NORMAL
+) -> Dict[str, Any]:
+    return _require_json_object(
+        endpoint, safe_post(endpoint, data=data, timeout=timeout)
+    )
 
 
-def _string_get(endpoint: str, field: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> str:
-    return _string_field_from_result(endpoint, safe_get(endpoint, params=params, timeout=timeout), field)
+def _string_get(
+    endpoint: str,
+    field: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> str:
+    return _string_field_from_result(
+        endpoint, safe_get(endpoint, params=params, timeout=timeout), field
+    )
 
 
-def _bool_get(endpoint: str, field: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> bool:
-    return _bool_field_from_result(endpoint, safe_get(endpoint, params=params, timeout=timeout), field)
+def _bool_get(
+    endpoint: str,
+    field: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> bool:
+    return _bool_field_from_result(
+        endpoint, safe_get(endpoint, params=params, timeout=timeout), field
+    )
 
 
-def _message_get(endpoint: str, default: str, params: Optional[Dict[str, str]] = None, timeout: int = TIMEOUT_NORMAL) -> str:
-    return _message_from_result(endpoint, safe_get(endpoint, params=params, timeout=timeout), default)
+def _message_get(
+    endpoint: str,
+    default: str,
+    params: Optional[Dict[str, str]] = None,
+    timeout: int = TIMEOUT_NORMAL,
+) -> str:
+    return _message_from_result(
+        endpoint, safe_get(endpoint, params=params, timeout=timeout), default
+    )
 
 
 def _try_parse_int(value: str) -> int | None:
@@ -152,16 +204,16 @@ def _format_memory_read_result(addr: str, size: str, raw_hex: str) -> Dict[str, 
             "warning": "Memory read returned an odd-length hex string",
         }
 
-    byte_values = [normalized[i:i + 2] for i in range(0, len(normalized), 2)]
+    byte_values = [normalized[i : i + 2] for i in range(0, len(normalized), 2)]
     base_addr = _try_parse_int(addr)
     bytes_read = len(byte_values)
     rows: List[Dict[str, Any]] = []
 
     for row_offset in range(0, bytes_read, 16):
-        row_bytes = byte_values[row_offset:row_offset + 16]
+        row_bytes = byte_values[row_offset : row_offset + 16]
         dwords_le = []
         for dword_offset in range(0, len(row_bytes), 4):
-            dword_bytes = row_bytes[dword_offset:dword_offset + 4]
+            dword_bytes = row_bytes[dword_offset : dword_offset + 4]
             if len(dword_bytes) == 4:
                 dwords_le.append("0x" + "".join(reversed(dword_bytes)).upper())
 
@@ -188,20 +240,22 @@ def _format_memory_read_result(addr: str, size: str, raw_hex: str) -> Dict[str, 
         "rows": rows,
     }
 
+
 # =============================================================================
 # UNIFIED COMMAND EXECUTION
 # =============================================================================
+
 
 @mcp.tool(name="exec.command")
 def ExecCommand(cmd: str, offset: int = 0, limit: int = 100) -> dict:
     """
     Execute a command in x64dbg and return its output
-    
+
     Parameters:
         cmd: Command to execute
         offset: Pagination offset for reference view results (default: 0)
         limit: Maximum number of reference view rows to return (default: 100, max: 5000)
-    
+
     Returns:
         Dictionary with:
         - success: Whether the command executed successfully
@@ -216,9 +270,11 @@ def ExecCommand(cmd: str, offset: int = 0, limit: int = 100) -> dict:
         timeout=TIMEOUT_NORMAL,
     )
 
+
 # =============================================================================
 # DEBUGGING STATUS
 # =============================================================================
+
 
 @mcp.tool(name="debug.running")
 def IsDebugActive() -> bool:
@@ -230,6 +286,7 @@ def IsDebugActive() -> bool:
     """
     status = _get_status_data()
     return isinstance(status, dict) and status.get("running") is True
+
 
 @mcp.tool(name="debug.attached")
 def IsDebugging() -> bool:
@@ -246,7 +303,10 @@ def IsDebugging() -> bool:
 def _detect_architecture_from_dump(register_dump: Dict[str, Any]) -> str:
     if not isinstance(register_dump, dict):
         return "unknown"
-    if any(name in register_dump for name in ("r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15")):
+    if any(
+        name in register_dump
+        for name in ("r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15")
+    ):
         return "x64"
     return "x86"
 
@@ -270,7 +330,11 @@ def _get_status_data() -> Dict[str, Any]:
 
 
 def _get_modules_data() -> List[Dict[str, Any]]:
-    return [module for module in _list_get("modules", timeout=TIMEOUT_NORMAL) if isinstance(module, dict)]
+    return [
+        module
+        for module in _list_get("modules", timeout=TIMEOUT_NORMAL)
+        if isinstance(module, dict)
+    ]
 
 
 @mcp.resource("debugger://status")
@@ -291,7 +355,9 @@ def DebuggerStatusResource() -> str:
 
     register_dump = GetRegisterDump()
     architecture = status.get("arch") or _detect_architecture_from_dump(register_dump)
-    current_ip = status.get("currentIp") or (register_dump.get("cip") if isinstance(register_dump, dict) else None)
+    current_ip = status.get("currentIp") or (
+        register_dump.get("cip") if isinstance(register_dump, dict) else None
+    )
     lines.append(f"- Architecture: {architecture}")
     if current_ip:
         lines.append(f"- Current IP: {current_ip}")
@@ -300,9 +366,13 @@ def DebuggerStatusResource() -> str:
         last_error = register_dump.get("lastError")
         last_status = register_dump.get("lastStatus")
         if isinstance(last_error, dict):
-            lines.append(f"- Last Error: {last_error.get('name', 'unknown')} ({last_error.get('code', 'n/a')})")
+            lines.append(
+                f"- Last Error: {last_error.get('name', 'unknown')} ({last_error.get('code', 'n/a')})"
+            )
         if isinstance(last_status, dict):
-            lines.append(f"- Last Status: {last_status.get('name', 'unknown')} ({last_status.get('code', 'n/a')})")
+            lines.append(
+                f"- Last Status: {last_status.get('name', 'unknown')} ({last_status.get('code', 'n/a')})"
+            )
 
     return "\n".join(lines)
 
@@ -430,54 +500,68 @@ def AnalyzeCurrentLocation() -> Dict[str, Any]:
 
     return result
 
+
 # =============================================================================
 # REGISTER API
 # =============================================================================
+
 
 @mcp.tool(name="register.get")
 def RegisterGet(register: str) -> str:
     """
     Get register value using Script API
-    
+
     Parameters:
         register: Register name (e.g. "eax", "rax", "rip")
-    
+
     Returns:
         Register value in hex format
     """
-    return _string_get("register/get", "value", {"name": register}, timeout=TIMEOUT_FAST)
+    return _string_get(
+        "register/get", "value", {"name": register}, timeout=TIMEOUT_FAST
+    )
+
 
 @mcp.tool(name="register.set")
 def RegisterSet(register: str, value: str) -> str:
     """
     Set register value using Script API
-    
+
     Parameters:
         register: Register name (e.g. "eax", "rax", "rip")
         value: Value to set (in hex format, e.g. "0x1000")
-    
+
     Returns:
         Status message
     """
-    return _message_get("register/set", "Register set request completed", {"name": register, "value": value}, timeout=TIMEOUT_NORMAL)
+    return _message_get(
+        "register/set",
+        "Register set request completed",
+        {"name": register, "value": value},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # MEMORY API
 # =============================================================================
 
+
 @mcp.tool(name="memory.read")
 def MemoryRead(addr: str, size: str) -> Dict[str, Any]:
     """
     Read memory using enhanced Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
         size: Number of bytes to read (decimal or 0x-prefixed hex)
-    
+
     Returns:
         Dictionary containing the raw hex string and row-based formatted output
     """
-    result = _object_get("memory/read", {"addr": addr, "size": size}, timeout=TIMEOUT_NORMAL)
+    result = _object_get(
+        "memory/read", {"addr": addr, "size": size}, timeout=TIMEOUT_NORMAL
+    )
     raw_hex = result.get("hex")
     if not isinstance(raw_hex, str):
         raise DebuggerError(f"memory/read missing string field 'hex': {result}")
@@ -490,55 +574,64 @@ def MemoryRead(addr: str, size: str) -> Dict[str, Any]:
         formatted["bytesRead"] = result["bytesRead"]
     return formatted
 
+
 @mcp.tool(name="memory.write")
 def MemoryWrite(addr: str, data: str) -> Dict[str, Any]:
     """
     Write memory using enhanced Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
         data: Hexadecimal string representing the data to write
-    
+
     Returns:
         Status message
     """
-    return _object_get("memory/write", {"addr": addr, "data": data}, timeout=TIMEOUT_NORMAL)
+    return _object_get(
+        "memory/write", {"addr": addr, "data": data}, timeout=TIMEOUT_NORMAL
+    )
+
 
 @mcp.tool(name="memory.is-valid")
 def MemoryIsValidPtr(addr: str) -> bool:
     """
     Check if memory address is valid
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
-    
+
     Returns:
         True if valid, False otherwise
     """
     return _bool_get("memory/is-valid", "valid", {"addr": addr}, timeout=TIMEOUT_FAST)
 
+
 @mcp.tool(name="memory.protect")
 def MemoryGetProtect(addr: str) -> str:
     """
     Get memory protection flags
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
-    
+
     Returns:
         Protection flags in hex format
     """
-    return _string_get("memory/protect", "protect", {"addr": addr}, timeout=TIMEOUT_FAST)
+    return _string_get(
+        "memory/protect", "protect", {"addr": addr}, timeout=TIMEOUT_FAST
+    )
+
 
 # =============================================================================
 # DEBUG API
 # =============================================================================
 
+
 @mcp.tool(name="debug.run")
 def DebugRun() -> str:
     """
     Resume execution of the debugged process using Script API
-    
+
     Returns:
         Status message
     """
@@ -547,268 +640,339 @@ def DebugRun() -> str:
         return "Debugger already running"
     return _message_get("debug/run", "Debug run request completed", timeout=TIMEOUT_RUN)
 
+
 @mcp.tool(name="debug.pause")
 def DebugPause() -> str:
     """
     Pause execution of the debugged process using Script API
-    
+
     Returns:
         Status message
     """
-    return _message_get("debug/pause", "Debug pause request completed", timeout=TIMEOUT_DEBUG)
+    return _message_get(
+        "debug/pause", "Debug pause request completed", timeout=TIMEOUT_DEBUG
+    )
+
 
 @mcp.tool(name="debug.stop")
 def DebugStop() -> str:
     """
     Stop debugging using Script API
-    
+
     Returns:
         Status message
     """
-    return _message_get("debug/stop", "Debug stop request completed", timeout=TIMEOUT_DEBUG)
+    return _message_get(
+        "debug/stop", "Debug stop request completed", timeout=TIMEOUT_DEBUG
+    )
+
 
 @mcp.tool(name="debug.step-in")
 def DebugStepIn() -> str:
     """
     Step into the next instruction using Script API
-    
+
     Returns:
         Status message
     """
-    return _message_get("debug/step-in", "Step in request completed", timeout=TIMEOUT_DEBUG)
+    return _message_get(
+        "debug/step-in", "Step in request completed", timeout=TIMEOUT_DEBUG
+    )
+
 
 @mcp.tool(name="debug.step-over")
 def DebugStepOver() -> str:
     """
     Step over the next instruction using Script API
-    
+
     Returns:
         Status message
     """
-    return _message_get("debug/step-over", "Step over request completed", timeout=TIMEOUT_DEBUG)
+    return _message_get(
+        "debug/step-over", "Step over request completed", timeout=TIMEOUT_DEBUG
+    )
+
 
 @mcp.tool(name="debug.step-out")
 def DebugStepOut() -> str:
     """
     Step out of the current function using Script API
-    
+
     Returns:
         Status message
     """
-    return _message_get("debug/step-out", "Step out request completed", timeout=TIMEOUT_DEBUG)
+    return _message_get(
+        "debug/step-out", "Step out request completed", timeout=TIMEOUT_DEBUG
+    )
+
 
 @mcp.tool(name="breakpoint.set")
 def DebugSetBreakpoint(addr: str) -> str:
     """
     Set breakpoint at address using Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
-    
+
     Returns:
         Status message
     """
-    return _message_get("breakpoint/set", "Breakpoint set request completed", {"addr": addr}, timeout=TIMEOUT_NORMAL)
+    return _message_get(
+        "breakpoint/set",
+        "Breakpoint set request completed",
+        {"addr": addr},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 @mcp.tool(name="breakpoint.delete")
 def DebugDeleteBreakpoint(addr: str) -> str:
     """
     Delete breakpoint at address using Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
-    
+
     Returns:
         Status message
     """
-    return _message_get("breakpoint/delete", "Breakpoint delete request completed", {"addr": addr}, timeout=TIMEOUT_NORMAL)
+    return _message_get(
+        "breakpoint/delete",
+        "Breakpoint delete request completed",
+        {"addr": addr},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # ASSEMBLER API
 # =============================================================================
 
+
 @mcp.tool(name="assembler.assemble")
 def AssemblerAssemble(addr: str, instruction: str) -> dict:
     """
     Assemble instruction at address using Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
         instruction: Assembly instruction (e.g. "mov eax, 1")
-    
+
     Returns:
         Dictionary with assembly result
     """
-    return _object_get("assembler/assemble", {"addr": addr, "instruction": instruction}, timeout=TIMEOUT_NORMAL)
+    return _object_get(
+        "assembler/assemble",
+        {"addr": addr, "instruction": instruction},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 @mcp.tool(name="assembler.write")
 def AssemblerAssembleMem(addr: str, instruction: str) -> str:
     """
     Assemble instruction directly into memory using Script API
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
         instruction: Assembly instruction (e.g. "mov eax, 1")
-    
+
     Returns:
         Status message
     """
-    return _message_get("assembler/write", "Assembler write request completed", {"addr": addr, "instruction": instruction}, timeout=TIMEOUT_NORMAL)
+    return _message_get(
+        "assembler/write",
+        "Assembler write request completed",
+        {"addr": addr, "instruction": instruction},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # STACK API
 # =============================================================================
 
+
 @mcp.tool(name="stack.pop")
 def StackPop() -> str:
     """
     Pop value from stack using Script API
-    
+
     Returns:
         Popped value in hex format
     """
     return _string_get("stack/pop", "value", timeout=TIMEOUT_NORMAL)
 
+
 @mcp.tool(name="stack.push")
 def StackPush(value: str) -> str:
     """
     Push value to stack using Script API
-    
+
     Parameters:
         value: Value to push (in hex format, e.g. "0x1000")
-    
+
     Returns:
         Previous top value in hex format
     """
-    return _string_get("stack/push", "previousTop", {"value": value}, timeout=TIMEOUT_NORMAL)
+    return _string_get(
+        "stack/push", "previousTop", {"value": value}, timeout=TIMEOUT_NORMAL
+    )
+
 
 @mcp.tool(name="stack.peek")
 def StackPeek(offset: str = "0") -> str:
     """
     Peek at stack value using Script API
-    
+
     Parameters:
         offset: Stack offset (default: "0")
-    
+
     Returns:
         Stack value in hex format
     """
-    return _string_get("stack/peek", "value", {"offset": offset}, timeout=TIMEOUT_NORMAL)
+    return _string_get(
+        "stack/peek", "value", {"offset": offset}, timeout=TIMEOUT_NORMAL
+    )
+
 
 # =============================================================================
 # FLAG API
 # =============================================================================
 
+
 @mcp.tool(name="flag.get")
 def FlagGet(flag: str) -> bool:
     """
     Get CPU flag value using Script API
-    
+
     Parameters:
         flag: Flag name (ZF, OF, CF, PF, SF, TF, AF, DF, IF)
-    
+
     Returns:
         Flag value (True/False)
     """
     return _bool_get("flag/get", "value", {"flag": flag}, timeout=TIMEOUT_FAST)
 
+
 @mcp.tool(name="flag.set")
 def FlagSet(flag: str, value: bool) -> str:
     """
     Set CPU flag value using Script API
-    
+
     Parameters:
         flag: Flag name (ZF, OF, CF, PF, SF, TF, AF, DF, IF)
         value: Flag value (True/False)
-    
+
     Returns:
         Status message
     """
-    return _message_get("flag/set", "Flag set request completed", {"flag": flag, "value": "true" if value else "false"}, timeout=TIMEOUT_NORMAL)
+    return _message_get(
+        "flag/set",
+        "Flag set request completed",
+        {"flag": flag, "value": "true" if value else "false"},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # PATTERN API
 # =============================================================================
 
+
 @mcp.tool(name="pattern.find")
 def PatternFindMem(start: str, size: str, pattern: str) -> str:
     """
     Find pattern in memory using Script API
-    
+
     Parameters:
         start: Start address (in hex format, e.g. "0x1000")
         size: Size to search IN DECIMAL
         pattern: Pattern to find (e.g. "48 8B 05 ?? ?? ?? ??")
-    
+
     Returns:
         Found address in hex format or error message
     """
-    return _string_get("pattern/find", "address", {"start": start, "size": size, "pattern": pattern}, timeout=TIMEOUT_NORMAL)
+    return _string_get(
+        "pattern/find",
+        "address",
+        {"start": start, "size": size, "pattern": pattern},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # MISC API
 # =============================================================================
 
+
 @mcp.tool(name="expression.parse")
 def MiscParseExpression(expression: str) -> str:
     """
     Parse expression using Script API
-    
+
     Parameters:
         expression: Expression to parse (e.g. "[esp+8]")
-    
+
     Returns:
         Parsed value in hex format
     """
-    return _string_get("expression/parse", "value", {"expression": expression}, timeout=TIMEOUT_NORMAL)
+    return _string_get(
+        "expression/parse", "value", {"expression": expression}, timeout=TIMEOUT_NORMAL
+    )
+
 
 @mcp.tool(name="module.proc-address")
 def MiscRemoteGetProcAddress(module: str, api: str) -> str:
     """
     Get remote procedure address using Script API
-    
+
     Parameters:
         module: Module name (e.g. "kernel32.dll")
         api: API name (e.g. "GetProcAddress")
-    
+
     Returns:
         Function address in hex format
     """
-    return _string_get("module/proc-address", "address", {"module": module, "api": api}, timeout=TIMEOUT_NORMAL)
+    return _string_get(
+        "module/proc-address",
+        "address",
+        {"module": module, "api": api},
+        timeout=TIMEOUT_NORMAL,
+    )
+
 
 # =============================================================================
 # DISASSEMBLY API
 # =============================================================================
 
+
 @mcp.tool(name="disasm.range")
 def DisasmGetInstructionRange(addr: str, count: int = 1) -> list:
     """
     Get disassembly of multiple instructions starting at the specified address
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1000")
         count: Number of instructions to disassemble (default: 1, max: 100)
-    
+
     Returns:
         List of dictionaries containing instruction details
     """
-    result = _list_get("disasm/range", {"addr": addr, "count": str(count)}, timeout=TIMEOUT_NORMAL)
+    result = _list_get(
+        "disasm/range", {"addr": addr, "count": str(count)}, timeout=TIMEOUT_NORMAL
+    )
     if result:
         return result
     # FastMCP can choke on empty list tool results, so return an explicit miss item.
-    return [{
-        "address": addr,
-        "instruction": "",
-        "size": 0,
-        "found": False
-    }]
+    return [{"address": addr, "instruction": "", "size": 0, "found": False}]
 
 
 @mcp.tool(name="disasm.step-into")
 def StepInWithDisasm() -> dict:
     """
     Step into the next instruction and return both step result and current instruction disassembly
-    
+
     Returns:
         Dictionary containing step result and current instruction info
     """
@@ -819,23 +983,24 @@ def StepInWithDisasm() -> dict:
 def GetModuleList() -> list:
     """
     Get list of loaded modules
-    
+
     Returns:
         List of module information (name, base address, size, etc.)
     """
     return _list_get("modules", timeout=TIMEOUT_NORMAL)
+
 
 @mcp.tool(name="symbol.query")
 def QuerySymbols(module: str, offset: int = 0, limit: int = 5000) -> dict:
     """
     Enumerate symbols for a specific module. Use GetModuleList first to discover module names.
     Returns imports, exports, and user-defined function symbols for the given module.
-    
+
     Args:
         module: Module name to query symbols for (e.g. "kernel32.dll", "ntdll.dll"). Required.
         offset: Pagination offset - number of symbols to skip (default: 0)
         limit: Maximum number of symbols to return per page (default: 5000, max: 50000)
-    
+
     Returns:
         Dictionary with:
         - total: Total number of symbols in the module
@@ -849,14 +1014,15 @@ def QuerySymbols(module: str, offset: int = 0, limit: int = 5000) -> dict:
         "offset": str(offset),
         "limit": str(limit),
     }
-    
+
     return _object_get("symbols", params)
+
 
 @mcp.tool(name="thread.list")
 def GetThreadList() -> dict:
     """
     Get list of all threads in the debugged process with detailed information.
-    
+
     Returns:
         Dictionary with:
         - count: Number of threads
@@ -867,33 +1033,36 @@ def GetThreadList() -> dict:
     """
     return _object_get("threads")
 
+
 @mcp.tool(name="thread.teb")
 def GetTebAddress(tid: str) -> dict:
     """
     Get the Thread Environment Block (TEB) address for a specific thread.
     Use GetThreadList first to discover thread IDs.
-    
+
     Args:
         tid: Thread ID (decimal integer string, e.g. "1234")
-    
+
     Returns:
         Dictionary with tid and tebAddress fields
     """
     return _object_get("thread/teb", {"tid": tid})
 
+
 @mcp.tool(name="module.by-address")
 def MemoryBase(addr: str) -> dict:
     """
     Find the base address and size of a module containing the given address
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x7FF12345")
-    
+
     Returns:
         Dictionary containing base_address and size of the module
     """
     return _object_get("module/by-address", {"addr": addr})
-        
+
+
 @mcp.tool(name="memory.protect.set")
 def SetPageRights(addr: str, rights: str) -> bool:
     """
@@ -906,26 +1075,27 @@ def SetPageRights(addr: str, rights: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    params = {
-        "addr": addr,
-        "rights": rights
-    }
+    params = {"addr": addr, "rights": rights}
 
-    return _bool_field_from_result("memory/protect/set", _object_post("memory/protect/set", params), "success")
+    return _bool_field_from_result(
+        "memory/protect/set", _object_post("memory/protect/set", params), "success"
+    )
+
 
 # =============================================================================
 # STRING API
 # =============================================================================
+
 
 @mcp.tool(name="string.at")
 def StringGetAt(addr: str) -> dict:
     """
     Retrieve the string at a given address in the debugged process.
     Uses x64dbg's internal string detection (same as the disassembly view).
-    
+
     Parameters:
         addr: Memory address (in hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried address
@@ -934,9 +1104,11 @@ def StringGetAt(addr: str) -> dict:
     """
     return _object_get("string/at", {"addr": addr})
 
+
 # =============================================================================
 # XREF (CROSS-REFERENCE) API
 # =============================================================================
+
 
 @mcp.tool(name="xref.list")
 def XrefGet(addr: str) -> dict:
@@ -944,13 +1116,13 @@ def XrefGet(addr: str) -> dict:
     Get all cross-references (xrefs) TO the specified address.
     Returns the list of addresses that reference the target address,
     along with the type of each reference (data, jmp, call).
-    
+
     Note: Results depend on x64dbg's analysis database. Run analysis
     first for comprehensive results.
-    
+
     Parameters:
         addr: Target address to find references to (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried target address
@@ -962,15 +1134,16 @@ def XrefGet(addr: str) -> dict:
     """
     return _object_get("xref/list", {"addr": addr})
 
+
 @mcp.tool(name="xref.count")
 def XrefCount(addr: str) -> dict:
     """
     Get the count of cross-references to the specified address.
     This is a lightweight check that doesn't fetch the full reference list.
-    
+
     Parameters:
         addr: Target address to count references for (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried address
@@ -978,16 +1151,18 @@ def XrefCount(addr: str) -> dict:
     """
     return _object_get("xref/count", {"addr": addr})
 
+
 # =============================================================================
 # MEMORY MAP API
 # =============================================================================
+
 
 @mcp.tool(name="memory.map")
 def GetMemoryMap() -> dict:
     """
     Get the full virtual memory map of the debugged process.
     Returns all memory pages with their base address, size, protection, type, and info.
-    
+
     Returns:
         Dictionary with:
         - count: Number of memory pages
@@ -996,20 +1171,22 @@ def GetMemoryMap() -> dict:
     """
     return _object_get("memory/map")
 
+
 # =============================================================================
 # REMOTE MEMORY ALLOC/FREE API
 # =============================================================================
+
 
 @mcp.tool(name="memory.alloc")
 def MemoryRemoteAlloc(size: str, addr: str = "0") -> dict:
     """
     Allocate memory in the debuggee's address space.
     Useful for code injection, shellcode testing, or creating data buffers.
-    
+
     Parameters:
         size: Size in bytes to allocate (hex format, e.g. "0x1000")
         addr: Preferred base address (hex format, default "0" for any address)
-    
+
     Returns:
         Dictionary with:
         - address: The allocated memory address
@@ -1017,32 +1194,35 @@ def MemoryRemoteAlloc(size: str, addr: str = "0") -> dict:
     """
     return _object_get("memory/alloc", {"addr": addr, "size": size})
 
+
 @mcp.tool(name="memory.free")
 def MemoryRemoteFree(addr: str) -> dict:
     """
     Free memory previously allocated in the debuggee's address space via MemoryRemoteAlloc.
-    
+
     Parameters:
         addr: Address of the memory to free (hex format, e.g. "0x1000")
-    
+
     Returns:
         Dictionary with success status
     """
     return _object_get("memory/free", {"addr": addr})
 
+
 # =============================================================================
 # BRANCH DESTINATION API
 # =============================================================================
+
 
 @mcp.tool(name="branch.destination")
 def GetBranchDestination(addr: str) -> dict:
     """
     Get the destination address of a branch instruction (jmp, call, jcc, etc.).
     Resolves where the branch at the given address would jump/call to.
-    
+
     Parameters:
         addr: Address of the branch instruction (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried instruction address
@@ -1051,16 +1231,18 @@ def GetBranchDestination(addr: str) -> dict:
     """
     return _object_get("branch/destination", {"addr": addr})
 
+
 # =============================================================================
 # CALL STACK API
 # =============================================================================
+
 
 @mcp.tool(name="callstack.get")
 def GetCallStack() -> dict:
     """
     Get the current call stack of the debugged thread.
     Returns the full stack trace with addresses, return addresses, and comments.
-    
+
     Returns:
         Dictionary with:
         - total: Number of stack frames
@@ -1072,18 +1254,20 @@ def GetCallStack() -> dict:
     """
     return _object_get("callstack")
 
+
 # =============================================================================
 # BREAKPOINT LIST API
 # =============================================================================
+
 
 @mcp.tool(name="breakpoint.list")
 def GetBreakpointList(type: str = "all") -> dict:
     """
     Get list of all breakpoints currently set in the debugger.
-    
+
     Parameters:
         type: Breakpoint type filter - "all" (default), "normal", "hardware", "memory", "dll", "exception"
-    
+
     Returns:
         Dictionary with:
         - count: Number of breakpoints
@@ -1092,33 +1276,36 @@ def GetBreakpointList(type: str = "all") -> dict:
     """
     return _object_get("breakpoint/list", {"type": type})
 
+
 # =============================================================================
 # LABEL API
 # =============================================================================
+
 
 @mcp.tool(name="label.set")
 def LabelSet(addr: str, text: str) -> dict:
     """
     Set a label at the specified address in x64dbg.
     Labels appear in the disassembly view and are useful for marking important addresses.
-    
+
     Parameters:
         addr: Address to set the label at (hex format, e.g. "0x1400010a0")
         text: Label text (e.g. "main_decrypt_loop")
-    
+
     Returns:
         Dictionary with success status, address, and label text
     """
     return _object_get("label/set", {"addr": addr, "text": text})
 
+
 @mcp.tool(name="label.get")
 def LabelGet(addr: str) -> dict:
     """
     Get the label at the specified address.
-    
+
     Parameters:
         addr: Address to query (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried address
@@ -1127,11 +1314,12 @@ def LabelGet(addr: str) -> dict:
     """
     return _object_get("label/get", {"addr": addr})
 
+
 @mcp.tool(name="label.list")
 def LabelList() -> dict:
     """
     Get all labels defined in the current debugging session.
-    
+
     Returns:
         Dictionary with:
         - count: Number of labels
@@ -1139,33 +1327,36 @@ def LabelList() -> dict:
     """
     return _object_get("label/list")
 
+
 # =============================================================================
 # COMMENT API
 # =============================================================================
+
 
 @mcp.tool(name="comment.set")
 def CommentSet(addr: str, text: str) -> dict:
     """
     Set a comment at the specified address in x64dbg.
     Comments appear in the disassembly view next to the instruction.
-    
+
     Parameters:
         addr: Address to set the comment at (hex format, e.g. "0x1400010a0")
         text: Comment text
-    
+
     Returns:
         Dictionary with success status and address
     """
     return _object_get("comment/set", {"addr": addr, "text": text})
 
+
 @mcp.tool(name="comment.get")
 def CommentGet(addr: str) -> dict:
     """
     Get the comment at the specified address.
-    
+
     Parameters:
         addr: Address to query (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried address
@@ -1174,9 +1365,11 @@ def CommentGet(addr: str) -> dict:
     """
     return _object_get("comment/get", {"addr": addr})
 
+
 # =============================================================================
 # REGISTER DUMP API
 # =============================================================================
+
 
 @mcp.tool(name="register.dump")
 def GetRegisterDump() -> dict:
@@ -1184,9 +1377,9 @@ def GetRegisterDump() -> dict:
     Get a complete dump of all CPU registers in one call.
     Returns general purpose registers, segment registers, debug registers,
     flags, and last error/status information.
-    
+
     Much more efficient than reading registers individually.
-    
+
     Returns:
         Dictionary with all register values (cax/ccx/cdx/cbx/csp/cbp/csi/cdi,
         r8-r15 on x64, cip, eflags, segment regs, debug regs, flags object,
@@ -1194,48 +1387,53 @@ def GetRegisterDump() -> dict:
     """
     return _object_get("registers")
 
+
 # =============================================================================
 # HARDWARE BREAKPOINT API
 # =============================================================================
+
 
 @mcp.tool(name="breakpoint.hardware.set")
 def SetHardwareBreakpoint(addr: str, type: str = "execute") -> dict:
     """
     Set a hardware breakpoint at the specified address.
     Hardware breakpoints use CPU debug registers (limited to 4 simultaneous).
-    
+
     Parameters:
         addr: Address to set the breakpoint at (hex format, e.g. "0x1400010a0")
         type: Breakpoint type - "execute" (default), "access" (read/write), or "write" (write only)
-    
+
     Returns:
         Dictionary with success status and address
     """
     return _object_get("breakpoint/hardware/set", {"addr": addr, "type": type})
 
+
 @mcp.tool(name="breakpoint.hardware.delete")
 def DeleteHardwareBreakpoint(addr: str) -> dict:
     """
     Delete a hardware breakpoint at the specified address.
-    
+
     Parameters:
         addr: Address of the hardware breakpoint to delete (hex format)
-    
+
     Returns:
         Dictionary with success status and address
     """
     return _object_get("breakpoint/hardware/delete", {"addr": addr})
 
+
 # =============================================================================
 # TCP CONNECTIONS API
 # =============================================================================
+
 
 @mcp.tool(name="network.tcp")
 def EnumTcpConnections() -> dict:
     """
     Enumerate all TCP connections of the debugged process.
     Useful for analyzing network activity, identifying C2 connections, etc.
-    
+
     Returns:
         Dictionary with:
         - count: Number of connections
@@ -1244,16 +1442,18 @@ def EnumTcpConnections() -> dict:
     """
     return _object_get("network/tcp")
 
+
 # =============================================================================
 # PATCH API
 # =============================================================================
+
 
 @mcp.tool(name="patch.list")
 def GetPatchList() -> dict:
     """
     Enumerate all memory patches applied in the current debugging session.
     Shows original and patched byte values for each patched address.
-    
+
     Returns:
         Dictionary with:
         - count: Number of patches
@@ -1261,14 +1461,15 @@ def GetPatchList() -> dict:
     """
     return _object_get("patch/list")
 
+
 @mcp.tool(name="patch.get")
 def GetPatchAt(addr: str) -> dict:
     """
     Check if a specific address has been patched and get patch details.
-    
+
     Parameters:
         addr: Address to check (hex format, e.g. "0x1400010a0")
-    
+
     Returns:
         Dictionary with:
         - address: The queried address
@@ -1279,9 +1480,11 @@ def GetPatchAt(addr: str) -> dict:
     """
     return _object_get("patch/get", {"addr": addr})
 
+
 # =============================================================================
 # HANDLE ENUMERATION API
 # =============================================================================
+
 
 @mcp.tool(name="handle.list")
 def EnumHandles() -> dict:
@@ -1289,7 +1492,7 @@ def EnumHandles() -> dict:
     Enumerate all open handles in the debugged process.
     Returns handle values, types, access rights, names, and type names.
     Useful for analyzing file handles, registry keys, mutexes, events, etc.
-    
+
     Returns:
         Dictionary with:
         - count: Number of handles
