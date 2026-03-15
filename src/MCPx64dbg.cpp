@@ -21,6 +21,7 @@
 #include "pluginsdk/_scriptapi_register.h"
 #include "pluginsdk/_scriptapi_stack.h"
 #include "pluginsdk/_scriptapi_symbol.h"
+#include "pluginsdk/TitanEngine.h"
 #include "pluginsdk/bridgemain.h"
 #include <iomanip> // For std::setw and std::setfill
 
@@ -82,6 +83,13 @@ bool g_httpServerRunning = false;
 int g_httpPort = DEFAULT_PORT;
 std::mutex g_httpMutex;
 SOCKET g_serverSocket = INVALID_SOCKET;
+
+struct GuiContextReadRequest {
+  DWORD titanIndex;
+  ULONG_PTR value;
+  bool success;
+  HANDLE doneEvent;
+};
 
 // Forward declarations
 bool startHttpServer();
@@ -267,6 +275,78 @@ getRequestParam(const std::unordered_map<std::string, std::string> &queryParams,
   }
 
   return "";
+}
+
+static void readContextOnGuiThread(void *userdata) {
+  auto *request = static_cast<GuiContextReadRequest *>(userdata);
+  request->success = false;
+  request->value = 0;
+
+  HANDLE threadHandle = DbgGetThreadHandle();
+  if (threadHandle != nullptr) {
+    if (request->titanIndex == UE_CFLAGS) {
+      TITAN_ENGINE_CONTEXT_t context = {};
+      if (GetFullContextDataEx(threadHandle, &context)) {
+        request->value = context.eflags;
+        request->success = true;
+      }
+    } else {
+      request->value = GetContextDataEx(threadHandle, request->titanIndex);
+      request->success = true;
+    }
+  }
+
+  SetEvent(request->doneEvent);
+}
+
+static bool readContextDataOnGuiThread(DWORD titanIndex, ULONG_PTR &value) {
+  GuiContextReadRequest request = {};
+  request.titanIndex = titanIndex;
+  request.doneEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (request.doneEvent == nullptr) {
+    return false;
+  }
+
+  GuiExecuteOnGuiThreadEx(readContextOnGuiThread, &request);
+  WaitForSingleObject(request.doneEvent, INFINITE);
+  CloseHandle(request.doneEvent);
+
+  if (!request.success) {
+    return false;
+  }
+
+  value = request.value;
+  return true;
+}
+
+static bool tryParseFlagBitIndex(const std::string &rawFlagName, int &bitIndex) {
+  std::string flagName = rawFlagName;
+  std::transform(
+      flagName.begin(), flagName.end(), flagName.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+  if (flagName == "cf")
+    bitIndex = 0;
+  else if (flagName == "pf")
+    bitIndex = 2;
+  else if (flagName == "af")
+    bitIndex = 4;
+  else if (flagName == "zf")
+    bitIndex = 6;
+  else if (flagName == "sf")
+    bitIndex = 7;
+  else if (flagName == "tf")
+    bitIndex = 8;
+  else if (flagName == "if")
+    bitIndex = 9;
+  else if (flagName == "df")
+    bitIndex = 10;
+  else if (flagName == "of")
+    bitIndex = 11;
+  else
+    return false;
+
+  return true;
 }
 
 static bool normalizePageRights(const std::string &rawRights,
@@ -1331,73 +1411,65 @@ DWORD WINAPI HttpServerThread(LPVOID lpParam) {
         // FLAG API ENDPOINTS
         // =============================================================================
         else if (path == "/flag/get") {
-          std::string flagName = queryParams["flag"];
+          std::string flagName = getRequestParam(queryParams, bodyParams, "flag");
           if (flagName.empty()) {
             sendJsonErrorResponse(clientSocket, 400, "Missing flag parameter");
             continue;
           }
 
-          bool value = false;
-          if (flagName == "ZF" || flagName == "zf")
-            value = Script::Flag::GetZF();
-          else if (flagName == "OF" || flagName == "of")
-            value = Script::Flag::GetOF();
-          else if (flagName == "CF" || flagName == "cf")
-            value = Script::Flag::GetCF();
-          else if (flagName == "PF" || flagName == "pf")
-            value = Script::Flag::GetPF();
-          else if (flagName == "SF" || flagName == "sf")
-            value = Script::Flag::GetSF();
-          else if (flagName == "TF" || flagName == "tf")
-            value = Script::Flag::GetTF();
-          else if (flagName == "AF" || flagName == "af")
-            value = Script::Flag::GetAF();
-          else if (flagName == "DF" || flagName == "df")
-            value = Script::Flag::GetDF();
-          else if (flagName == "IF" || flagName == "if")
-            value = Script::Flag::GetIF();
-          else {
+          int bitIndex = -1;
+          if (!tryParseFlagBitIndex(flagName, bitIndex)) {
             sendJsonErrorResponse(clientSocket, 400, "Unknown flag");
             continue;
           }
 
+          ULONG_PTR cflags = 0;
+          if (!readContextDataOnGuiThread(UE_CFLAGS, cflags)) {
+            sendJsonErrorResponse(clientSocket, 500, "Failed to read flags");
+            continue;
+          }
+
+          bool value = ((cflags >> bitIndex) & 1) != 0;
           std::stringstream ss;
           ss << "{\"flag\":\"" << flagName
              << "\",\"value\":" << (value ? "true" : "false") << "}";
           sendHttpResponse(clientSocket, 200, "application/json", ss.str());
         } else if (path == "/flag/set") {
-          std::string flagName = queryParams["flag"];
-          std::string valueStr = queryParams["value"];
+          std::string flagName = getRequestParam(queryParams, bodyParams, "flag");
+          std::string valueStr = getRequestParam(queryParams, bodyParams, "value");
           if (flagName.empty() || valueStr.empty()) {
             sendJsonErrorResponse(clientSocket, 400,
                                   "Missing flag or value parameter");
             continue;
           }
 
-          bool value = (valueStr == "true" || valueStr == "1");
-          bool success = false;
+          std::string normalizedValue = valueStr;
+          std::transform(normalizedValue.begin(), normalizedValue.end(),
+                         normalizedValue.begin(),
+                         [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                         });
 
-          if (flagName == "ZF" || flagName == "zf")
-            success = Script::Flag::SetZF(value);
-          else if (flagName == "OF" || flagName == "of")
-            success = Script::Flag::SetOF(value);
-          else if (flagName == "CF" || flagName == "cf")
-            success = Script::Flag::SetCF(value);
-          else if (flagName == "PF" || flagName == "pf")
-            success = Script::Flag::SetPF(value);
-          else if (flagName == "SF" || flagName == "sf")
-            success = Script::Flag::SetSF(value);
-          else if (flagName == "TF" || flagName == "tf")
-            success = Script::Flag::SetTF(value);
-          else if (flagName == "AF" || flagName == "af")
-            success = Script::Flag::SetAF(value);
-          else if (flagName == "DF" || flagName == "df")
-            success = Script::Flag::SetDF(value);
-          else if (flagName == "IF" || flagName == "if")
-            success = Script::Flag::SetIF(value);
-          else {
+          bool value = (normalizedValue == "true" || normalizedValue == "1");
+          int bitIndex = -1;
+          if (!tryParseFlagBitIndex(flagName, bitIndex)) {
             sendJsonErrorResponse(clientSocket, 400, "Unknown flag");
             continue;
+          }
+
+          bool success = false;
+          HANDLE threadHandle = DbgGetThreadHandle();
+          if (threadHandle != nullptr) {
+            ULONG_PTR cflags = GetContextDataEx(threadHandle, UE_CFLAGS);
+            if (value)
+              cflags |= static_cast<ULONG_PTR>(1) << bitIndex;
+            else
+              cflags &= ~(static_cast<ULONG_PTR>(1) << bitIndex);
+
+            success = SetContextDataEx(threadHandle, UE_CFLAGS, cflags);
+            if (success) {
+              GuiUpdateRegisterView();
+            }
           }
 
           std::stringstream ss;

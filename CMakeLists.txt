@@ -59,26 +59,6 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include
 )
 
-# Add source files
-file(GLOB SOURCES "src/*.cpp")
-
-# Create shared library (plugin)
-add_library(${PROJECT_NAME} SHARED ${SOURCES})
-
-# Set output name
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    PREFIX ""
-    OUTPUT_NAME "${PROJECT_NAME}"
-    SUFFIX "${PLUGIN_EXT}"
-)
-
-# Define macro for architecture
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE _WIN64)
-else()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE _WIN32)
-endif()
-
 # Add path to library files
 link_directories(${X64DBG_SDK_PATH}/pluginsdk)
 
@@ -118,33 +98,51 @@ else()
     set(XEDPARSE_LIB "${X64DBG_SDK_PATH}/pluginsdk/XEDParse/XEDParse${ARCH_SUFFIX}.lib")
 endif()
 
-# Link x64dbg libraries and dependencies
-target_link_libraries(${PROJECT_NAME}
-        ws2_32                         # For winsock2
-        winhttp                        # WinHTTP library
-        ${TITAN_ENGINE_LIB}
-        ${DEVICE_RESOLVER_LIB}
-        ${JANSSON_LIB}
-        ${LZ4_LIB}
-        ${XEDPARSE_LIB}
-)
+function(configure_x64dbg_plugin target_name source_file)
+    add_library(${target_name} SHARED ${source_file})
 
-if (CMAKE_SIZEOF_VOID_P EQUAL 4)
-    target_link_libraries(${PROJECT_NAME}
-            ${X64DBG_SDK_PATH}/pluginsdk/x32dbg.lib
-            ${X64DBG_SDK_PATH}/pluginsdk/x32bridge.lib
+    set_target_properties(${target_name} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "${target_name}"
+        SUFFIX "${PLUGIN_EXT}"
     )
-elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    target_link_libraries(${PROJECT_NAME}
-            ${X64DBG_SDK_PATH}/pluginsdk/x64dbg.lib
-            ${X64DBG_SDK_PATH}/pluginsdk/x64bridge.lib
+
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        target_compile_definitions(${target_name} PRIVATE _WIN64)
+    else()
+        target_compile_definitions(${target_name} PRIVATE _WIN32)
+    endif()
+
+    target_link_libraries(${target_name}
+            ws2_32
+            winhttp
+            ${TITAN_ENGINE_LIB}
+            ${DEVICE_RESOLVER_LIB}
+            ${JANSSON_LIB}
+            ${LZ4_LIB}
+            ${XEDPARSE_LIB}
     )
-endif()
-# Just show information about where the plugin is built
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo ""
-    COMMAND ${CMAKE_COMMAND} -E echo "=== Plugin build complete ==="
-    COMMAND ${CMAKE_COMMAND} -E echo "Plugin built at: ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/${PROJECT_NAME}${PLUGIN_EXT}"
-    COMMAND ${CMAKE_COMMAND} -E echo "Install manually to: $ENV{ProgramFiles}/x64dbg/release/x${ARCH_BITS}/plugins/${PROJECT_NAME}${PLUGIN_EXT}"
-    COMMAND ${CMAKE_COMMAND} -E echo "================================="
-)
+
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        target_link_libraries(${target_name}
+                ${X64DBG_SDK_PATH}/pluginsdk/x32dbg.lib
+                ${X64DBG_SDK_PATH}/pluginsdk/x32bridge.lib
+        )
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        target_link_libraries(${target_name}
+                ${X64DBG_SDK_PATH}/pluginsdk/x64dbg.lib
+                ${X64DBG_SDK_PATH}/pluginsdk/x64bridge.lib
+        )
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo ""
+        COMMAND ${CMAKE_COMMAND} -E echo "=== Plugin build complete ==="
+        COMMAND ${CMAKE_COMMAND} -E echo "Plugin built at: ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/${target_name}${PLUGIN_EXT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "Install manually to: $ENV{ProgramFiles}/x64dbg/release/x${ARCH_BITS}/plugins/${target_name}${PLUGIN_EXT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "================================="
+    )
+endfunction()
+
+configure_x64dbg_plugin(${PROJECT_NAME} "src/MCPx64dbg.cpp")
+configure_x64dbg_plugin(FlagRepro "src/FlagRepro.cpp")

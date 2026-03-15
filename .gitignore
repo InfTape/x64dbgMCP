@@ -5,3 +5,5 @@ build64/
 __pycache__/
 *.pyc
 mcp_features.md
+src/FlagRepro.cpp
+issue-script-flag-set.md
